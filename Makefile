@@ -6,7 +6,7 @@ bin/microshell: src/vector.c src/microshell.c
 	$(CC) $(CFLAGS) -o $@ $^
 
 run: bin/microshell
-	PS1="\e[32;1m\u@\h\e[0m[\e[34m\w\e[0m] \P " ./bin/microshell
+	./bin/microshell
 
 clean:
 	rm bin/*

@@ -7,12 +7,17 @@
 #include "core.h"
 #include "terminal.h"
 
+char const *default_ps1 = "\\e[32;1m\\u@\\h\\e[0m[\\e[34m\\w\\e[0m] \\P ";
+
+
 void print_evaluated_ps1(char const *shell_exec_name, int has_root_privilages, int last_command_result)
 {
   int escape_next = false;
   char buffer[BUFSIZ];
 
   char const *ps1 = getenv("PS1");
+  if (!ps1)
+    ps1 = default_ps1;
 
   for (; *ps1 != '\0'; ++ps1) {
     if (*ps1 == '\\') {
