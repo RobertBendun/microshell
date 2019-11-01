@@ -12,13 +12,7 @@ static uint32_t most_significant_bit_u32(uint32_t n)
   return ((n + 1) >> 1);
 }
 
-static uint32_t most_significant_bit_u64(uint32_t n)
-{
-  assert(0);
-  return n;
-}
-
-static size_t(*const most_significant_bit_size_t)(size_t) = most_significant_bit_u32;
+static size_t(*const most_significant_bit_size_t)(size_t) = (void*)most_significant_bit_u32;
 
 static int is_only_one_bit_set(uint64_t b)
 {

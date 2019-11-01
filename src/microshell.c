@@ -292,7 +292,6 @@ StringView find_word(StringView command)
   
   char *p = command.begin;
   char *str_begin = NULL, *str_end = NULL;
-  int has_word = false;
 
   for (; p != command.end; ++p) {
     if (!escape_mode && *p == '"') {
@@ -358,7 +357,8 @@ const Program builtin_commands_handlers[] = {
 int eval_simple_command(Command cmd, Vector path_dirs)
 {
   pid_t pid;
-  int status, i;
+  int status;
+  size_t i;
   char buffer[1024];
   StringView cd;
   struct stat sb;
