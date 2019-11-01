@@ -10,10 +10,40 @@
 #include <sys/stat.h>
 
 #include "core.h"
+#include "vector.h"
 #include "terminal.h"
+#include "StringView.h"
+
+int builtin_exit(int argc, char **argv);
+int builtin_cd(int argc, char **argv);
 
 char const *default_ps1 = "\\e[32;1m\\u@\\h\\e[0m[\\e[34m\\w\\e[0m] \\P ";
 
+typedef int(*Program)(int argc, char **argv);
+
+char const* const builtin_commands[] = {
+  "exit",
+  "cd"
+};
+
+const Program builtin_commands_handlers[] = {
+  builtin_exit,
+  builtin_cd
+};
+
+int builtin_exit(int argc, char **argv)
+{
+  if (argc > 1)
+    exit(atoi(argv[1]));
+
+  exit(EXIT_SUCCESS);
+  return EXIT_SUCCESS;
+}
+
+int builtin_cd(int argc, char **argv)
+{
+  return chdir(argv[1]) == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+}
 
 void print_evaluated_ps1(char const *shell_exec_name, int has_root_privilages, int last_command_result)
 {
@@ -76,68 +106,6 @@ void print_evaluated_ps1(char const *shell_exec_name, int has_root_privilages, i
 }
 
 
-StringView readline(FILE *in)
-{
-  StringView result;
-  size_t len = 0;
-  ssize_t length = 0;
-
-  result.begin = result.end = NULL;
-  memset(&result, 0, sizeof(result));
-  if ((length = getline(&(result.begin), &len, in)) < 0) {
-    perror("getline");
-    free(result.begin);
-    result.begin = result.end = NULL;
-    return result;
-  }
-
-  result.end = result.begin + length;
-  return result;
-}
-
-StringView trim(StringView sv)
-{
-  while (sv.begin != sv.end && (*sv.begin == ' ' || *sv.begin == '\t'))
-    ++sv.begin;
-  
-  while (sv.begin != sv.end && (*(sv.end - 1) == ' ' || *(sv.end - 1) == '\t'))
-    --sv.end;
-
-  return sv;
-}
-
-int strview_str_cmp(StringView sv, char const* str)
-{
-  while (sv.begin != sv.end) {
-    if (*sv.begin != *str)
-      break;
-    ++sv.begin;
-    ++str;
-  }
-
-  if (sv.begin == sv.end)
-    return  *str == '\0' ? 0 : -1;
-
-  return ((unsigned char)*sv.begin) - ((unsigned char)*str);
-}
-
-int try_match(StringView sv, char const *str)
-{
-  int i = 0;
-
-  size_t count = 0;
-  size_t len = strlen(str);
-
-  for (i = 0; sv.begin != sv.end && str[i] != '\0'; ++i)
-    if (sv.begin[i] == str[i])
-      ++count;
-    else {
-      count = 0;
-      break;
-    }
-
-  return count == len;
-}
 
 enum PipeType
 {
@@ -264,7 +232,7 @@ Command parse_command(StringView command)
   return parse_pipe(command);
 }
 
-#include "vector.h"
+
 
 Vector parse_path_env(char const *path)
 {
@@ -320,39 +288,6 @@ StringView find_word(StringView command)
   return command;
 }
 
-char* strview_to_cstr(StringView sv)
-{
-  char *str = malloc(strviewlen(sv) + 1);
-  str[strviewlen(sv)] = '\0';
-  memcpy(str, sv.begin, strviewlen(sv));
-  return str;
-}
-
-int builtin_exit(int argc, char **argv)
-{
-  if (argc > 1)
-    exit(atoi(argv[1]));
-
-  exit(EXIT_SUCCESS);
-  return EXIT_SUCCESS;
-}
-
-int builtin_cd(int argc, char **argv)
-{
-  return chdir(argv[1]) == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
-}
-
-typedef int(*Program)(int argc, char **argv);
-
-char const* const builtin_commands[] = {
-  "exit",
-  "cd"
-};
-
-const Program builtin_commands_handlers[] = {
-  builtin_exit,
-  builtin_cd
-};
 
 int eval_simple_command(Command cmd, Vector path_dirs)
 {
@@ -364,6 +299,7 @@ int eval_simple_command(Command cmd, Vector path_dirs)
   struct stat sb;
   int builtin = false;
 
+  Vector args;
   StringView word = trim(find_word(cmd.value));
   char *cmdname = strview_to_cstr(word);
 
@@ -399,7 +335,6 @@ int eval_simple_command(Command cmd, Vector path_dirs)
     }
   }
 
-  Vector args;
   fill(args, 0);
   vector(char*, &args, 0) = cmdname;
   if (word.end != cmd.value.end && *word.end == '"')

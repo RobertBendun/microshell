@@ -12,7 +12,8 @@ static uint32_t most_significant_bit_u32(uint32_t n)
   return ((n + 1) >> 1);
 }
 
-static size_t(*const most_significant_bit_size_t)(size_t) = (void*)most_significant_bit_u32;
+static size_t(*const most_significant_bit_size_t)(size_t) = 
+  (size_t(*const)(size_t))most_significant_bit_u32;
 
 static int is_only_one_bit_set(uint64_t b)
 {
@@ -38,7 +39,6 @@ void vector_reserve_bytes(Vector *vec, size_t minimum_capacity, size_t type_size
   free(vec->data);
 
   vec->data = new;
-  LOG("[vector]: capacity - old: %lu, new %lu\n", vec->capacity, new_capacity);
   vec->capacity = new_capacity;
 }
 
