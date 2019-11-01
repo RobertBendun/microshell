@@ -105,10 +105,9 @@ void print_evaluated_ps1(char const *shell_exec_name, int has_root_privilages, i
   }
 }
 
-
-
 enum PipeType
 {
+  None,
   PIPE,
   AND,
   OR,
@@ -232,8 +231,6 @@ Command parse_command(StringView command)
   return parse_pipe(command);
 }
 
-
-
 Vector parse_path_env(char const *path)
 {
   Vector      path_dirs;
@@ -288,8 +285,63 @@ StringView find_word(StringView command)
   return command;
 }
 
+int execute_command(Command cmd, Vector path_dirs, int pipefd[2], int mode, pid_t *pid);
 
-int eval_simple_command(Command cmd, Vector path_dirs)
+#define READ 0x2
+#define WRITE 0x1
+
+int eval_pipe(Command cmd, Vector path_dirs)
+{
+  int exit_code;
+  pid_t p1, p2;
+  int status;
+  int pipefd[2];
+  int readp, writep;
+  char eof = EOF;
+
+  if (cmd.next == NULL)
+    simple_command: return execute_command(cmd, path_dirs, pipefd, 0, NULL);
+  
+  switch (cmd.type) {
+    case PIPE:
+    {
+      assert(false); // THIS IS SO BROKEN WTF
+      pipe(pipefd);
+      readp = pipefd[0], writep = pipefd[1];
+      execute_command(cmd, path_dirs, pipefd, WRITE, &p1);
+      exit_code = execute_command(*cmd.next, path_dirs, pipefd, READ, &p2);
+      close(readp);
+      close(readp);
+      waitpid(p1, &status, 0);
+      waitpid(p1, &status, 0);
+      return WIFEXITED(status) ? WEXITSTATUS(status) : EXIT_SUCCESS;
+    }
+    break;
+
+    case AND:
+      exit_code = execute_command(cmd, path_dirs, pipefd, 0, NULL);
+      return exit_code == EXIT_SUCCESS 
+        ? execute_command(*cmd.next, path_dirs, pipefd, 0, NULL)
+        : exit_code;
+    
+    case OR:
+      exit_code = execute_command(cmd, path_dirs, pipefd, 0, NULL);
+      return exit_code != EXIT_SUCCESS 
+        ? execute_command(*cmd.next, path_dirs, pipefd, 0, NULL)
+        : exit_code;
+
+    case SEMICOLON:
+      (void) execute_command(cmd, path_dirs, STDIN_FILENO, STDOUT_FILENO, NULL);
+      return execute_command(*cmd.next, path_dirs, STDIN_FILENO, STDOUT_FILENO, NULL);
+    
+    case None:
+      goto simple_command;
+  }
+
+  return EXIT_SUCCESS;
+}
+
+int execute_command(Command cmd, Vector path_dirs, int pipefd[2], int mode, pid_t *pid_ptr)
 {
   pid_t pid;
   int status;
@@ -329,7 +381,7 @@ int eval_simple_command(Command cmd, Vector path_dirs)
     }
 
     if (i == path_dirs.size) {
-      printf(BRIGHT_RED "microshell: command {%s} was not found.\n" COLOR_RESET, cmdname);
+      printf(BRIGHT_RED "microshell: command {" BRIGHT_WHITE "%s" BRIGHT_RED "} was not found.\n" COLOR_RESET, cmdname);
       free(cmdname);
       return EXIT_FAILURE;
     }
@@ -344,6 +396,9 @@ int eval_simple_command(Command cmd, Vector path_dirs)
   cmd.value = trim(cmd.value);
   for (i = 1; word.end != cmd.value.end; ++i) {
     word = find_word(cmd.value);
+    if (!strviewlen(trim(word)))
+      break;
+
     vector(char*, &args, i) = strview_to_cstr(word);
     if (word.end != cmd.value.end && *word.end == '"')
       word.end += 1;
@@ -352,18 +407,42 @@ int eval_simple_command(Command cmd, Vector path_dirs)
     cmd.value = trim(cmd.value);
   }
 
-
   if (builtin) {
     int exit_code = builtin_commands_handlers[builtin-1](args.size, (char**)args.data);
     vector_destroy(&args);
     return exit_code;
   } else {
     if ((pid = fork()) == 0) { /* child */
+      switch (mode) {
+        case READ:
+          close(STDOUT_FILENO);
+          close(pipefd[1]);
+          dup(pipefd[0]);
+          close(pipefd[0]);
+          break;
+
+        case WRITE:
+          close(STDIN_FILENO);
+          close(pipefd[0]);
+          dup(pipefd[1]);
+          close(pipefd[1]);
+          break;
+
+        default:
+          break;
+      }
+
       execv(buffer, (char**)args.data);
     }
 
-    waitpid(pid, &status, 0);
-    return WIFEXITED(status) ? WEXITSTATUS(status) : EXIT_FAILURE;
+    if (pid_ptr == NULL) {
+      waitpid(pid, &status, 0);
+      return WIFEXITED(status) ? WEXITSTATUS(status) : EXIT_FAILURE;
+    }
+    else {
+      *pid_ptr = pid;
+      return EXIT_SUCCESS;
+    }
   }
 }
 
@@ -382,7 +461,7 @@ int main(int argc, char const* *argv)
     
     input.end--;
     cmd = parse_command(input);
-    exit_code = eval_simple_command(cmd, path_dirs);
+    exit_code = eval_pipe(cmd, path_dirs);
     destroy_command(cmd);
     free(input.begin);
   }
