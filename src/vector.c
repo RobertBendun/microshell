@@ -18,10 +18,7 @@ static uint32_t most_significant_bit_u64(uint32_t n)
   return n;
 }
 
-static size_t(*const most_significant_bit_size_t)(size_t) =
-  (true || sizeof(size_t) == sizeof(uint32_t))
-    ? cast(void* const, most_significant_bit_u32)
-    : cast(void* const, most_significant_bit_u64);
+static size_t(*const most_significant_bit_size_t)(size_t) = most_significant_bit_u32;
 
 static int is_only_one_bit_set(uint64_t b)
 {

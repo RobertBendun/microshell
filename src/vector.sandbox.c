@@ -8,8 +8,6 @@ int main()
   size_t i = 0;
   Vector vec;
   fill(vec, 0);
-  
-  vector_reserve(int, &vec, 10);
 
   for (i = 0; i < 32; ++i)
     vector(int, &vec, i) = i + 1;

@@ -1,3 +1,6 @@
+#ifndef CORE_H
+#define CORE_H
+
 #define false (!!0)
 #define true  (!false)
 
@@ -22,3 +25,4 @@ typedef struct {
 } StringView;
 
 #define strviewlen(strview) ((strview).end - (strview).begin)
+#endif
