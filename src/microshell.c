@@ -1,8 +1,11 @@
+#define _GNU_SOURCE
 #define _POSIX_C_SOURCE 200112L
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <libgen.h>
+#include <string.h>
 
 #include "core.h"
 #include "terminal.h"
@@ -26,6 +29,7 @@ void print_evaluated_ps1(char const *shell_exec_name, int has_root_privilages, i
     }
     
     if (escape_next) {
+      escape_next = false;
       switch (*ps1) {
         case '\\': putchar('\\'); break;
         case 'e': putchar('\x1b'); break;
@@ -63,16 +67,75 @@ void print_evaluated_ps1(char const *shell_exec_name, int has_root_privilages, i
             has_root_privilages ? '#' : '$');
           break;  
       }
-      escape_next = false;
     }
     else
       putchar(*ps1);
   }
 }
 
+
+StringView readline(FILE *in)
+{
+  StringView result;
+  size_t len = 0;
+  ssize_t length = 0;
+
+  result.begin = result.end = NULL;
+  memset(&result, 0, sizeof(result));
+  if ((length = getline(&(result.begin), &len, in)) < 0) {
+    perror("getline");
+    free(result.begin);
+    result.begin = result.end = NULL;
+    return result;
+  }
+
+  result.end = result.begin + length;
+  return result;
+}
+
+StringView trim(StringView sv)
+{
+  while (sv.begin != sv.end && (*sv.begin == ' ' || *sv.begin == '\t'))
+    ++sv.begin;
+  
+  while (sv.begin != sv.end && (*(sv.end - 1) == ' ' || *(sv.end - 1) == '\t'))
+    --sv.end;
+
+  return sv;
+}
+
+int strview_str_cmp(StringView sv, char const* str)
+{
+  while (sv.begin != sv.end) {
+    if (*sv.begin != *str)
+      break;
+    ++sv.begin;
+    ++str;
+  }
+
+  if (sv.begin == sv.end)
+    return  *str == '\0' ? 0 : -1;
+
+  return ((unsigned char)*sv.begin) - ((unsigned char)*str);
+}
+
 int main(int argc, char const* *argv)
 {
-  print_evaluated_ps1(argv[0], false, 0);
-  puts("");
+  StringView input;
+  StringView command;
+
+  for (;;) {
+    print_evaluated_ps1(argv[0], false, 0);
+    if (!(input = readline(stdin)).begin)
+      break;
+    
+    command = input;
+    command.end--;
+    command = trim(command);
+    if (strview_str_cmp(command, "exit") == 0)
+      exit(0);
+
+    free(command.begin);
+  }
   return 0;
 }

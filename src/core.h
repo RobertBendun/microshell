@@ -1,4 +1,4 @@
-#define false (0)
+#define false (!!0)
 #define true  (!false)
 
 #define cast(type, value) ((type)(value))
@@ -21,4 +21,4 @@ typedef struct {
   char *end;
 } StringView;
 
-#define strviewlen(strview) ((strview).end - (strview).begin + 1)
+#define strviewlen(strview) ((strview).end - (strview).begin)
