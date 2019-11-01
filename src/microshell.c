@@ -292,6 +292,7 @@ StringView find_word(StringView command)
   
   char *p = command.begin;
   char *str_begin = NULL, *str_end = NULL;
+  int has_word = false;
 
   for (; p != command.end; ++p) {
     if (!escape_mode && *p == '"') {
@@ -325,9 +326,31 @@ char* strview_to_cstr(StringView sv)
   char *str = malloc(strviewlen(sv) + 1);
   str[strviewlen(sv)] = '\0';
   memcpy(str, sv.begin, strviewlen(sv));
-  fputs(str, stderr);
   return str;
 }
+
+int builtin_exit(int argc, char **argv)
+{
+  exit(EXIT_SUCCESS);
+  return EXIT_SUCCESS;
+}
+
+int builtin_cd(int argc, char **argv)
+{
+  return chdir(argv[1]) == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+
+typedef int(*Program)(int argc, char **argv);
+
+char const* const builtin_commands[] = {
+  "exit",
+  "cd"
+};
+
+const Program builtin_commands_handlers[] = {
+  builtin_exit,
+  builtin_cd
+};
 
 int eval_simple_command(Command cmd, Vector path_dirs)
 {
@@ -336,42 +359,72 @@ int eval_simple_command(Command cmd, Vector path_dirs)
   char buffer[1024];
   StringView cd;
   struct stat sb;
+  int builtin = false;
 
   StringView word = trim(find_word(cmd.value));
   char *cmdname = strview_to_cstr(word);
 
-  /* find command location */
-  for (i = 0; i < path_dirs.size; ++i) {
-    cd = vector(StringView, &path_dirs, i);
-    memset(buffer, 0, sizeof(buffer) / sizeof(*buffer));
-
-    strncpy(buffer, cd.begin, strviewlen(cd));
-    buffer[strviewlen(cd)] = '/';
-    buffer[strviewlen(cd) + 1] = '\0';
-    strcat(buffer, cmdname);
-
-    if (stat(buffer, &sb) == 0 && sb.st_mode & S_IXUSR)
+  /* check if is builtin */
+  for (i = 0; i < sizeof(builtin_commands) / sizeof(*builtin_commands); ++i) {
+    if (strcmp(cmdname, builtin_commands[i]) == 0) {
+      builtin = i + 1;
       break;
+    }
   }
 
-  if (i == path_dirs.size) {
-    printf("Cannot find command ");
-    puts(cmdname);
-    return EXIT_FAILURE;
+  /* find command location */
+  if (!builtin) {
+    for (i = 0; i < path_dirs.size; ++i) {
+      cd = vector(StringView, &path_dirs, i);
+      memset(buffer, 0, sizeof(buffer) / sizeof(*buffer));
+
+      strncpy(buffer, cd.begin, strviewlen(cd));
+      buffer[strviewlen(cd)] = '/';
+      buffer[strviewlen(cd) + 1] = '\0';
+      strcat(buffer, cmdname);
+
+      if (stat(buffer, &sb) == 0 && sb.st_mode & S_IXUSR)
+        break;
+    }
+
+    if (i == path_dirs.size) {
+      printf(BRIGHT_RED "microshell: command {%s} was not found.\n" COLOR_RESET, cmdname);
+      free(cmdname);
+      return EXIT_FAILURE;
+    }
   }
 
   Vector args;
+  fill(args, 0);
   vector(char*, &args, 0) = cmdname;
+  if (word.end != cmd.value.end && *word.end == '"')
+      word.end += 1;
 
-  if ((pid = fork()) == 0) { /* child */
-    execv(buffer, (char**)args.data);
+  cmd.value.begin = word.end;
+  cmd.value = trim(cmd.value);
+  for (i = 1; word.end != cmd.value.end; ++i) {
+    word = find_word(cmd.value);
+    vector(char*, &args, i) = strview_to_cstr(word);
+    if (word.end != cmd.value.end && *word.end == '"')
+      word.end += 1;
+
+    cmd.value.begin = word.end;
+    cmd.value = trim(cmd.value);
   }
 
-  waitpid(pid, &status, 0);
 
-  if (WIFEXITED(status))
-    return WEXITSTATUS(status);
-  return EXIT_FAILURE;
+  if (builtin) {
+    int exit_code = builtin_commands_handlers[builtin-1](args.size, (char**)args.data);
+    vector_destroy(&args);
+    return exit_code;
+  } else {
+    if ((pid = fork()) == 0) { /* child */
+      execv(buffer, (char**)args.data);
+    }
+
+    waitpid(pid, &status, 0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : EXIT_FAILURE;
+  }
 }
 
 int main(int argc, char const* *argv)
