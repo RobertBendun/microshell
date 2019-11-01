@@ -119,6 +119,116 @@ int strview_str_cmp(StringView sv, char const* str)
   return ((unsigned char)*sv.begin) - ((unsigned char)*str);
 }
 
+int try_match(StringView sv, char const *str)
+{
+  int i = 0;
+
+  size_t count = 0;
+  size_t len = strlen(str);
+
+  for (i = 0; sv.begin != sv.end && str[i] != '\0'; ++i)
+    if (sv.begin[i] == str[i])
+      ++count;
+    else {
+      count = 0;
+      break;
+    }
+
+  return count == len;
+}
+
+enum PipeType
+{
+  PIPE,
+  AND,
+  OR
+};
+
+typedef struct command
+{
+  StringView value;
+  struct command *next;
+  enum PipeType type;
+} Command;
+
+Command parse_simple_command(StringView *sv)
+{
+  Command cmd;
+  cmd.value.begin = sv->begin;
+  sv->begin = cmd.value.end = strpbrk(sv->begin, "|&");
+  if (sv->begin == NULL)
+    sv->begin = cmd.value.end = sv->end;
+  
+  return cmd;
+}
+
+Command* copy_to_heap(Command c)
+{
+  Command *r = malloc(sizeof(Command));
+  memcpy(r, &c, sizeof(Command));
+  return r;
+}
+
+Command parse_pipe(StringView sv)
+{
+  Command lhs;
+  lhs = parse_simple_command(&sv);
+
+  if (sv.begin == sv.end)
+    return lhs;
+
+  if (try_match(sv, "&&")) {
+    sv.begin += 2;
+    lhs.next = copy_to_heap(parse_pipe(trim(sv)));
+    lhs.type = AND;
+  }
+  else if (try_match(sv, "||")) {
+    sv.begin += 2;
+    lhs.next = copy_to_heap(parse_pipe(trim(sv)));
+    lhs.type = OR;
+  }
+  else if (try_match(sv, "|")) {
+    sv.begin += 1;
+    lhs.next = copy_to_heap(parse_pipe(trim(sv)));
+    lhs.type = PIPE;
+  }
+
+  return lhs;
+}
+
+void print_indent(size_t indent)
+{
+  size_t i;
+  for (i = 0; i < indent; ++i) putchar(' ');
+}
+
+void print_command(Command cmd, size_t indent)
+{
+  print_indent(indent);
+
+  if (cmd.next != NULL) {
+    switch (cmd.type) {
+      case AND: puts("&&"); break;
+      case OR:  puts("||"); break;
+      case PIPE: puts("|"); break;
+    }
+    print_indent(indent += 2);
+  }
+
+  fwrite(cmd.value.begin, 1, strviewlen(cmd.value), stdout);
+  putchar('\n');
+  if (cmd.next == NULL)
+    return;
+  
+  print_command(*cmd.next, indent);
+}
+
+void parse_command(StringView command)
+{
+  Command cmd = parse_pipe(command);
+  print_command(cmd, 0);
+}
+
 int main(int argc, char const* *argv)
 {
   StringView input;
@@ -135,7 +245,9 @@ int main(int argc, char const* *argv)
     if (strview_str_cmp(command, "exit") == 0)
       exit(0);
 
+    parse_command(command);
     free(command.begin);
   }
+
   return 0;
 }
