@@ -331,6 +331,9 @@ char* strview_to_cstr(StringView sv)
 
 int builtin_exit(int argc, char **argv)
 {
+  if (argc > 1)
+    exit(atoi(argv[1]));
+
   exit(EXIT_SUCCESS);
   return EXIT_SUCCESS;
 }
@@ -367,7 +370,8 @@ int eval_simple_command(Command cmd, Vector path_dirs)
   /* check if is builtin */
   for (i = 0; i < sizeof(builtin_commands) / sizeof(*builtin_commands); ++i) {
     if (strcmp(cmdname, builtin_commands[i]) == 0) {
-      builtin = i + 1;
+      /* store builtin index as (index + 1) - if we have not found index builtin will evaluate to 0 - wich means false */
+      builtin = i + 1; 
       break;
     }
   }
@@ -378,6 +382,7 @@ int eval_simple_command(Command cmd, Vector path_dirs)
       cd = vector(StringView, &path_dirs, i);
       memset(buffer, 0, sizeof(buffer) / sizeof(*buffer));
 
+      /* string from PATH + command name construction */
       strncpy(buffer, cd.begin, strviewlen(cd));
       buffer[strviewlen(cd)] = '/';
       buffer[strviewlen(cd) + 1] = '\0';
