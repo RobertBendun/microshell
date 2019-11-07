@@ -296,8 +296,6 @@ int eval_pipe(Command cmd, Vector path_dirs)
   pid_t p1, p2;
   int status;
   int pipefd[2];
-  int readp, writep;
-  char eof = EOF;
 
   if (cmd.next == NULL)
     simple_command: return execute_command(cmd, path_dirs, pipefd, 0, NULL);
@@ -305,15 +303,20 @@ int eval_pipe(Command cmd, Vector path_dirs)
   switch (cmd.type) {
     case PIPE:
     {
-      assert(false); // THIS IS SO BROKEN WTF
-      pipe(pipefd);
-      readp = pipefd[0], writep = pipefd[1];
+      if (!cmd.next) {
+        fprintf(stderr, "Internal bug: pipe should have next command.\n");
+        exit(EXIT_FAILURE);
+      }
+
+      if (pipe(pipefd) < 0) {
+        perror("microshell: pipe:");
+        exit(EXIT_FAILURE);
+      }
       execute_command(cmd, path_dirs, pipefd, WRITE, &p1);
       exit_code = execute_command(*cmd.next, path_dirs, pipefd, READ, &p2);
-      close(readp);
-      close(readp);
-      waitpid(p1, &status, 0);
-      waitpid(p1, &status, 0);
+      wait(NULL);
+      close(pipefd[0]);
+      close(pipefd[1]);
       return WIFEXITED(status) ? WEXITSTATUS(status) : EXIT_SUCCESS;
     }
     break;
@@ -321,18 +324,18 @@ int eval_pipe(Command cmd, Vector path_dirs)
     case AND:
       exit_code = execute_command(cmd, path_dirs, pipefd, 0, NULL);
       return exit_code == EXIT_SUCCESS 
-        ? execute_command(*cmd.next, path_dirs, pipefd, 0, NULL)
+        ? eval_pipe(*cmd.next, path_dirs)
         : exit_code;
     
     case OR:
       exit_code = execute_command(cmd, path_dirs, pipefd, 0, NULL);
       return exit_code != EXIT_SUCCESS 
-        ? execute_command(*cmd.next, path_dirs, pipefd, 0, NULL)
+        ? eval_pipe(*cmd.next, path_dirs)
         : exit_code;
 
     case SEMICOLON:
-      (void) execute_command(cmd, path_dirs, STDIN_FILENO, STDOUT_FILENO, NULL);
-      return execute_command(*cmd.next, path_dirs, STDIN_FILENO, STDOUT_FILENO, NULL);
+      (void) execute_command(cmd, path_dirs, pipefd, 0, NULL);
+      return eval_pipe(*cmd.next, path_dirs);
     
     case None:
       goto simple_command;
@@ -394,6 +397,7 @@ int execute_command(Command cmd, Vector path_dirs, int pipefd[2], int mode, pid_
 
   cmd.value.begin = word.end;
   cmd.value = trim(cmd.value);
+
   for (i = 1; word.end != cmd.value.end; ++i) {
     word = find_word(cmd.value);
     if (!strviewlen(trim(word)))
@@ -417,14 +421,14 @@ int execute_command(Command cmd, Vector path_dirs, int pipefd[2], int mode, pid_
         case READ:
           close(STDOUT_FILENO);
           close(pipefd[1]);
-          dup(pipefd[0]);
+          dup2(pipefd[0], STDOUT_FILENO);
           close(pipefd[0]);
           break;
 
         case WRITE:
           close(STDIN_FILENO);
           close(pipefd[0]);
-          dup(pipefd[1]);
+          dup2(pipefd[1], STDIN_FILENO);
           close(pipefd[1]);
           break;
 
@@ -455,7 +459,7 @@ int main(int argc, char const* *argv)
   Vector path_dirs = parse_path_env(getenv("PATH"));
 
   for (;;) {
-    print_evaluated_ps1(argv[0], false, exit_code);
+    print_evaluated_ps1(argv[0], /* has root privilages  */ geteuid() == 0, exit_code);
     if (!(input = readline(stdin)).begin)
       break;
     
