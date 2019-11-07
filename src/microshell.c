@@ -8,6 +8,7 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
+#include <signal.h>
 
 #include "core.h"
 #include "vector.h"
@@ -33,10 +34,12 @@ const Program builtin_commands_handlers[] = {
 
 int builtin_exit(int argc, char **argv)
 {
-  if (argc > 1)
-    exit(atoi(argv[1]));
-
-  exit(EXIT_SUCCESS);
+  union sigval sigval;
+  sigval.sival_int = argc >= 2 ? atoi(argv[1]) : 0;
+  if (sigqueue(getppid(), SIGUSR1, sigval) < 0) {
+    perror("exit: "); /* windows subsystem for linux prints Function not implemented */
+    kill(getppid(), SIGUSR1);
+  }
   return EXIT_SUCCESS;
 }
 
@@ -285,119 +288,131 @@ StringView find_word(StringView command)
   return command;
 }
 
-int execute_command(Command cmd, Vector path_dirs, int pipefd[2], int mode, pid_t *pid);
+void execute_command(Command cmd, Vector path_dirs);
 
-#define READ 0x2
-#define WRITE 0x1
 
-int eval_pipe(Command cmd, Vector path_dirs)
+int extract_exit_code_from_status(int wait_status)
 {
-  int exit_code;
-  pid_t p1, p2;
+  return WIFEXITED(wait_status) ? WEXITSTATUS(wait_status) : EXIT_FAILURE;
+}
+
+void wait_for_child()
+{
+  wait(NULL);
+}
+
+int eval_pipe(Command cmd, Vector path_dirs, int not_fork)
+{
+  pid_t pid;
   int status;
   int pipefd[2];
 
-  if (cmd.next == NULL)
-    simple_command: return execute_command(cmd, path_dirs, pipefd, 0, NULL);
-  
-  switch (cmd.type) {
-    case PIPE:
-    {
-      if (!cmd.next) {
-        fprintf(stderr, "Internal bug: pipe should have next command.\n");
-        exit(EXIT_FAILURE);
-      }
-
-      if (pipe(pipefd) < 0) {
-        perror("microshell: pipe:");
-        exit(EXIT_FAILURE);
-      }
-      execute_command(cmd, path_dirs, pipefd, WRITE, &p1);
-      exit_code = execute_command(*cmd.next, path_dirs, pipefd, READ, &p2);
-      wait(NULL);
-      close(pipefd[0]);
-      close(pipefd[1]);
-      return WIFEXITED(status) ? WEXITSTATUS(status) : EXIT_SUCCESS;
+  if (cmd.next == NULL) {
+    simple_command: 
+    if (not_fork || (pid = fork()) == 0)
+      execute_command(cmd, path_dirs);
+    else {
+      wait(&status);
+      return extract_exit_code_from_status(status);
     }
-    break;
+  }
 
-    case AND:
-      exit_code = execute_command(cmd, path_dirs, pipefd, 0, NULL);
-      return exit_code == EXIT_SUCCESS 
-        ? eval_pipe(*cmd.next, path_dirs)
-        : exit_code;
-    
-    case OR:
-      exit_code = execute_command(cmd, path_dirs, pipefd, 0, NULL);
-      return exit_code != EXIT_SUCCESS 
-        ? eval_pipe(*cmd.next, path_dirs)
-        : exit_code;
-
-    case SEMICOLON:
-      (void) execute_command(cmd, path_dirs, pipefd, 0, NULL);
-      return eval_pipe(*cmd.next, path_dirs);
-    
+  switch (cmd.type) {
     case None:
       goto simple_command;
+
+    case PIPE:
+      if (not_fork || (pid = fork()) == 0) {
+        /* child process for lhs of pipe operator */
+        pipe(pipefd);
+        if (fork() == 0) {
+          /* child process for rhs of pipe operator */
+          close(0);
+          dup(pipefd[0]);
+          close(pipefd[0]);
+          close(pipefd[1]);
+          eval_pipe(*cmd.next, path_dirs, true);
+        } else {
+          close(1);
+          dup(pipefd[1]);
+          close(pipefd[0]);
+          close(pipefd[1]);
+          atexit(wait_for_child);
+          execute_command(cmd, path_dirs);
+        }
+      } else {
+        wait(&status);
+        return extract_exit_code_from_status(status);
+      }
+      break;
+
+    case AND:
+    case OR:
+    case SEMICOLON:
+      if ((pid = fork()) == 0)
+        execute_command(cmd, path_dirs);
+
+      wait(&status);
+      status = extract_exit_code_from_status(status);
+
+      return cmd.type == SEMICOLON || (status == 0 ? cmd.type == AND : cmd.type == OR)
+        ? eval_pipe(*cmd.next, path_dirs, false) 
+        : status;
   }
 
   return EXIT_SUCCESS;
 }
 
-int execute_command(Command cmd, Vector path_dirs, int pipefd[2], int mode, pid_t *pid_ptr)
+void execute_command(Command cmd, Vector path_dirs)
 {
-  pid_t pid;
-  int status;
-  size_t i;
   char buffer[1024];
-  StringView cd;
-  struct stat sb;
-  int builtin = false;
-
+  char const *cmdname;
+  StringView word, current_directory;
+  struct stat s;
+  int builtin = false; /* since !0 is true in C, no builtin is 0, builtin is (builtin_index + 1) */
   Vector args;
-  StringView word = trim(find_word(cmd.value));
-  char *cmdname = strview_to_cstr(word);
+  size_t i;
 
-  /* check if is builtin */
+  word = trim(find_word(cmd.value));
+  cmdname = strview_to_cstr(word); /* @Incomplete: Check if cmdname is heap allocated and if so deallocate it */
+
+  /* check if command is builtin */
   for (i = 0; i < sizeof(builtin_commands) / sizeof(*builtin_commands); ++i) {
     if (strcmp(cmdname, builtin_commands[i]) == 0) {
-      /* store builtin index as (index + 1) - if we have not found index builtin will evaluate to 0 - wich means false */
-      builtin = i + 1; 
+      builtin = i + 1;
       break;
     }
   }
 
-  /* find command location */
   if (!builtin) {
+    /* find command location */
     for (i = 0; i < path_dirs.size; ++i) {
-      cd = vector(StringView, &path_dirs, i);
-      memset(buffer, 0, sizeof(buffer) / sizeof(*buffer));
-
-      /* string from PATH + command name construction */
-      strncpy(buffer, cd.begin, strviewlen(cd));
-      buffer[strviewlen(cd)] = '/';
-      buffer[strviewlen(cd) + 1] = '\0';
+      current_directory = vector(StringView, &path_dirs, i);
+      fill(buffer, 0);
+      strncpy(buffer, current_directory.begin, strviewlen(current_directory));
+      memcpy(buffer + strviewlen(current_directory), "/", 2);
       strcat(buffer, cmdname);
 
-      if (stat(buffer, &sb) == 0 && sb.st_mode & S_IXUSR)
+      if (stat(buffer, &s) == 0 && s.st_mode & S_IXUSR)
         break;
     }
 
     if (i == path_dirs.size) {
       printf(BRIGHT_RED "microshell: command {" BRIGHT_WHITE "%s" BRIGHT_RED "} was not found.\n" COLOR_RESET, cmdname);
-      free(cmdname);
-      return EXIT_FAILURE;
+      return 0;
     }
   }
 
   fill(args, 0);
-  vector(char*, &args, 0) = cmdname;
+  vector(char*, &args, 0) = (char*)cmdname;
+
   if (word.end != cmd.value.end && *word.end == '"')
       word.end += 1;
 
   cmd.value.begin = word.end;
   cmd.value = trim(cmd.value);
 
+  /* build arguments table */
   for (i = 1; word.end != cmd.value.end; ++i) {
     word = find_word(cmd.value);
     if (!strviewlen(trim(word)))
@@ -411,43 +426,17 @@ int execute_command(Command cmd, Vector path_dirs, int pipefd[2], int mode, pid_
     cmd.value = trim(cmd.value);
   }
 
+  /* execute command or builtin with given args */
   if (builtin) {
-    int exit_code = builtin_commands_handlers[builtin-1](args.size, (char**)args.data);
-    vector_destroy(&args);
-    return exit_code;
+    exit(builtin_commands_handlers[builtin-1](args.size, (char**)args.data));
   } else {
-    if ((pid = fork()) == 0) { /* child */
-      switch (mode) {
-        case READ:
-          close(STDOUT_FILENO);
-          close(pipefd[1]);
-          dup2(pipefd[0], STDOUT_FILENO);
-          close(pipefd[0]);
-          break;
-
-        case WRITE:
-          close(STDIN_FILENO);
-          close(pipefd[0]);
-          dup2(pipefd[1], STDIN_FILENO);
-          close(pipefd[1]);
-          break;
-
-        default:
-          break;
-      }
-
-      execv(buffer, (char**)args.data);
-    }
-
-    if (pid_ptr == NULL) {
-      waitpid(pid, &status, 0);
-      return WIFEXITED(status) ? WEXITSTATUS(status) : EXIT_FAILURE;
-    }
-    else {
-      *pid_ptr = pid;
-      return EXIT_SUCCESS;
-    }
+    execv(buffer, (char**)args.data);
   }
+}
+
+void handle_exit_signal(int sig, siginfo_t *si, void *ucontext)
+{
+  exit(si->si_value.sival_int);
 }
 
 int main(int argc, char const* *argv)
@@ -458,6 +447,13 @@ int main(int argc, char const* *argv)
 
   Vector path_dirs = parse_path_env(getenv("PATH"));
 
+  struct sigaction sa;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_sigaction = handle_exit_signal;
+  sa.sa_flags = SA_SIGINFO;
+  sigaction(SIGUSR1, &sa, NULL);
+
+ 
   for (;;) {
     print_evaluated_ps1(argv[0], /* has root privilages  */ geteuid() == 0, exit_code);
     if (!(input = readline(stdin)).begin)
@@ -465,7 +461,7 @@ int main(int argc, char const* *argv)
     
     input.end--;
     cmd = parse_command(input);
-    exit_code = eval_pipe(cmd, path_dirs);
+    exit_code = eval_pipe(cmd, path_dirs, false);
     destroy_command(cmd);
     free(input.begin);
   }
