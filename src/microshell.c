@@ -37,7 +37,6 @@ int builtin_exit(int argc, char **argv)
   union sigval sigval;
   sigval.sival_int = argc >= 2 ? atoi(argv[1]) : 0;
   if (sigqueue(getppid(), SIGUSR1, sigval) < 0) {
-    perror("exit: "); /* windows subsystem for linux prints Function not implemented */
     kill(getppid(), SIGUSR1);
   }
   return EXIT_SUCCESS;
@@ -290,7 +289,6 @@ StringView find_word(StringView command)
 
 void execute_command(Command cmd, Vector path_dirs);
 
-
 int extract_exit_code_from_status(int wait_status)
 {
   return WIFEXITED(wait_status) ? WEXITSTATUS(wait_status) : EXIT_FAILURE;
@@ -399,7 +397,7 @@ void execute_command(Command cmd, Vector path_dirs)
 
     if (i == path_dirs.size) {
       printf(BRIGHT_RED "microshell: command {" BRIGHT_WHITE "%s" BRIGHT_RED "} was not found.\n" COLOR_RESET, cmdname);
-      return 0;
+      exit(EXIT_FAILURE);
     }
   }
 
@@ -434,9 +432,14 @@ void execute_command(Command cmd, Vector path_dirs)
   }
 }
 
-void handle_exit_signal(int sig, siginfo_t *si, void *ucontext)
+void handle_exit_api_sigaction(int sig, siginfo_t *si, void *ucontext)
 {
   exit(si->si_value.sival_int);
+}
+
+void handle_exit_api_signal()
+{
+  exit(EXIT_SUCCESS);
 }
 
 int main(int argc, char const* *argv)
@@ -449,17 +452,27 @@ int main(int argc, char const* *argv)
 
   struct sigaction sa;
   sigemptyset(&sa.sa_mask);
-  sa.sa_sigaction = handle_exit_signal;
+  sa.sa_sigaction = handle_exit_api_sigaction;
   sa.sa_flags = SA_SIGINFO;
-  sigaction(SIGUSR1, &sa, NULL);
-
+  
+  /* 
+    sigaction is not supported by Windows Subsystem For Linux
+    so we need to fallback to old API to make sure that exit works
+   */
+  if (sigaction(SIGUSR1, &sa, NULL) < 0) {
+    if (signal(SIGUSR1, handle_exit_api_signal) == SIG_ERR)
+      fprintf(stderr, "microshell: cannot register signal for exit command.\n" BRIGHT_RED "That makes exit command useless\n" COLOR_RESET);
+  }
  
   for (;;) {
     print_evaluated_ps1(argv[0], /* has root privilages  */ geteuid() == 0, exit_code);
     if (!(input = readline(stdin)).begin)
       break;
-    
+
     input.end--;
+    if (input.begin == input.end)
+      continue;
+
     cmd = parse_command(input);
     exit_code = eval_pipe(cmd, path_dirs, false);
     destroy_command(cmd);
