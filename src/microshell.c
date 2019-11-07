@@ -18,7 +18,7 @@
 int builtin_exit(int argc, char **argv);
 int builtin_cd(int argc, char **argv);
 
-char const *default_ps1 = "\\e[32;1m\\u@\\h\\e[0m[\\e[34m\\w\\e[0m] \\P ";
+char const *default_ps1 = "\\e[32;1m\\u@\\h\\e[0m[\\e[34m\\w\\e[0m] \\P ";  
 
 typedef int(*Program)(int argc, char **argv);
 
@@ -205,6 +205,7 @@ void print_command(Command cmd, size_t indent)
       case OR:        puts("||"); break;
       case PIPE:      puts("|");  break;
       case SEMICOLON: puts(";");  break;
+      case None: assert(false); break;
     }
     print_indent(indent += 2);
   }
@@ -299,14 +300,59 @@ void wait_for_child()
   wait(NULL);
 }
 
+Vector build_args(Command cmd, char const* cmdname, StringView word)
+{
+  int i;
+  Vector args;
+  fill(args, 0);
+  vector(char*, &args, 0) = (char*)cmdname;
+
+  if (word.end != cmd.value.end && *word.end == '"')
+      word.end += 1;
+
+  cmd.value.begin = word.end;
+  cmd.value = trim(cmd.value);
+
+  /* build arguments table */
+  for (i = 1; word.end != cmd.value.end; ++i) {
+    word = find_word(cmd.value);
+    if (!strviewlen(trim(word)))
+      break;
+
+    vector(char*, &args, i) = strview_to_cstr(word);
+    if (word.end != cmd.value.end && *word.end == '"')
+      word.end += 1;
+
+    cmd.value.begin = word.end;
+    cmd.value = trim(cmd.value);
+  }
+
+  return args;
+}
+
 int eval_pipe(Command cmd, Vector path_dirs, int not_fork)
 {
   pid_t pid;
   int status;
   int pipefd[2];
+  StringView sv;
 
   if (cmd.next == NULL) {
-    simple_command: 
+    simple_command:
+    sv = find_word(cmd.value);
+    /* this is obscure */
+    if (strncmp(sv.begin, "cd", strviewlen(sv)) == 0) {
+      size_t i;
+      Vector args = build_args(cmd, strview_to_cstr(sv), sv);
+      status = builtin_cd(args.size, (char**)args.data);
+
+      for (i = 0; i < args.size; ++i)
+        free(vector(char*, &args, i));
+      vector_destroy(&args);
+      
+      return status;
+    }
+
     if (not_fork || (pid = fork()) == 0)
       execute_command(cmd, path_dirs);
     else {
@@ -322,17 +368,21 @@ int eval_pipe(Command cmd, Vector path_dirs, int not_fork)
     case PIPE:
       if (not_fork || (pid = fork()) == 0) {
         /* child process for lhs of pipe operator */
-        pipe(pipefd);
+        if (pipe(pipefd) < 0){
+          fprintf(stderr, "Cannot open pipe to handle processes.\n");
+          exit(EXIT_FAILURE);
+        }
+
         if (fork() == 0) {
           /* child process for rhs of pipe operator */
           close(0);
-          dup(pipefd[0]);
+          assert(dup(pipefd[0]) >= 0);
           close(pipefd[0]);
           close(pipefd[1]);
           eval_pipe(*cmd.next, path_dirs, true);
         } else {
           close(1);
-          dup(pipefd[1]);
+          assert(dup(pipefd[1]) >= 0);
           close(pipefd[0]);
           close(pipefd[1]);
           atexit(wait_for_child);
@@ -401,28 +451,7 @@ void execute_command(Command cmd, Vector path_dirs)
     }
   }
 
-  fill(args, 0);
-  vector(char*, &args, 0) = (char*)cmdname;
-
-  if (word.end != cmd.value.end && *word.end == '"')
-      word.end += 1;
-
-  cmd.value.begin = word.end;
-  cmd.value = trim(cmd.value);
-
-  /* build arguments table */
-  for (i = 1; word.end != cmd.value.end; ++i) {
-    word = find_word(cmd.value);
-    if (!strviewlen(trim(word)))
-      break;
-
-    vector(char*, &args, i) = strview_to_cstr(word);
-    if (word.end != cmd.value.end && *word.end == '"')
-      word.end += 1;
-
-    cmd.value.begin = word.end;
-    cmd.value = trim(cmd.value);
-  }
+  args = build_args(cmd, cmdname, word);
 
   /* execute command or builtin with given args */
   if (builtin) {
@@ -463,8 +492,9 @@ int main(int argc, char const* *argv)
     if (signal(SIGUSR1, handle_exit_api_signal) == SIG_ERR)
       fprintf(stderr, "microshell: cannot register signal for exit command.\n" BRIGHT_RED "That makes exit command useless\n" COLOR_RESET);
   }
- 
+
   for (;;) {
+    wait(NULL); /* added just to be sure */
     print_evaluated_ps1(argv[0], /* has root privilages  */ geteuid() == 0, exit_code);
     if (!(input = readline(stdin)).begin)
       break;
