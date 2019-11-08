@@ -17,19 +17,48 @@
 
 int builtin_exit(int argc, char **argv);
 int builtin_cd(int argc, char **argv);
+int builtin_help(int argc, char **argv);
 
 char const *default_ps1 = "\\e[32;1m\\u@\\h\\e[0m[\\e[34m\\w\\e[0m] \\P ";  
 
 typedef int(*Program)(int argc, char **argv);
 
-char const* const builtin_commands[] = {
-  "exit",
-  "cd"
-};
-
-const Program builtin_commands_handlers[] = {
-  builtin_exit,
-  builtin_cd
+struct {
+  char const* name;
+  char const* description;
+  Program handler;
+  char const* help;
+} builtin_commands[] = {
+  {
+    "exit",
+    "syntax: 'exit [exit_code]' if exit_code is not specified 0 is returned.",
+    builtin_exit,
+    "exit [N]\n"
+    "  Exit the shell.\n"
+    "\n"
+    "  Exits the shell with a status of N. If n is omitted,\n"
+    "  the exit status is defaulted to 0\n"
+    "\n"
+    "Known bug:\n"
+    "  on Windows Subsystem For Linux sigaction is not implemented.\n"
+    "  With current design, on WSL exit code is always 0, regardless N parameter"
+  },
+  {
+    "cd",
+    "syntax: 'cd [path]' changes current working directory to path",
+    builtin_cd,
+    "cd [path]\n"
+    "  Changes current working directory to path.\n"
+    "  If path is not specified its defaulted to $HOME env"
+  },
+  {
+    "help",
+    "syntax: 'help [builtin]' prints help about microshell or describes builtin command if specified",
+    builtin_help,
+    "help [builtin]\n"
+    "  Displays information about builtin command.\n"
+    "  If builtin is not specified help prints information about microshell"
+  }
 };
 
 int builtin_exit(int argc, char **argv)
@@ -45,6 +74,39 @@ int builtin_exit(int argc, char **argv)
 int builtin_cd(int argc, char **argv)
 {
   return chdir(argv[1]) == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+
+int builtin_help(int argc, char **argv)
+{
+  size_t i;
+
+  if (argc == 1) {
+    printf(
+      "  _____  ____  __  __  _____ "   "   " "" "\n"
+      " |  __ \\|  _ \\|  \\/  |/ ____|""   " "microshell by Robert Bendun" "\n"
+      " | |__) | |_) | \\  / | (___  "  "   " "features:" "\n"
+      " |  _  /|  _ <| |\\/| |\\___ \\ ""   " "  - powerful builtin commands" "\n"
+      " | | \\ \\| |_) | |  | |____) |" "   " "  - |, || and && operators" "\n"
+      " |_|  \\_\\____/|_|  |_|_____/ " "   " "  - PS1 format support for nice prompt" "\n"
+      "\n"
+    );
+
+    printf("list of builtins: \n");
+    for (i = 0; i < arraylen(builtin_commands); ++i)
+      printf(" * %s\n    %s\n", builtin_commands[i].name, builtin_commands[i].description);
+  } else {
+    for (i = 0; i < arraylen(builtin_commands); ++i)
+      if (strcmp(builtin_commands[i].name, argv[1]) == 0) {
+        puts(builtin_commands[i].help);
+        return EXIT_SUCCESS;
+      }
+
+    printf(
+      BRIGHT_WHITE "%s" 
+      BRIGHT_RED " does not have help page or is not a builtin command\n" COLOR_RESET, argv[1], argv[1]);
+  
+    return EXIT_FAILURE;
+  }
 }
 
 void print_evaluated_ps1(char const *shell_exec_name, int has_root_privilages, int last_command_result)
@@ -426,7 +488,7 @@ void execute_command(Command cmd, Vector path_dirs)
 
   /* check if command is builtin */
   for (i = 0; i < sizeof(builtin_commands) / sizeof(*builtin_commands); ++i) {
-    if (strcmp(cmdname, builtin_commands[i]) == 0) {
+    if (strcmp(cmdname, builtin_commands[i].name) == 0) {
       builtin = i + 1;
       break;
     }
@@ -455,7 +517,7 @@ void execute_command(Command cmd, Vector path_dirs)
 
   /* execute command or builtin with given args */
   if (builtin) {
-    exit(builtin_commands_handlers[builtin-1](args.size, (char**)args.data));
+    exit(builtin_commands[builtin-1].handler(args.size, (char**)args.data));
   } else {
     execv(buffer, (char**)args.data);
   }

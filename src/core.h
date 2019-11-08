@@ -9,6 +9,8 @@
 #include <string.h>
 #define fill(var, val) (memset(&(var), val, sizeof(var)))
 
+#define arraylen(a) (sizeof(a) / sizeof(*a))
+
 #include <stdint.h>
 #include <assert.h>
 
