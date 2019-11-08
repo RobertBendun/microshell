@@ -19,7 +19,7 @@ int builtin_exit(int argc, char **argv);
 int builtin_cd(int argc, char **argv);
 int builtin_help(int argc, char **argv);
 
-char const *default_ps1 = "\\e[32;1m\\u@\\h\\e[0m[\\e[34m\\w\\e[0m] \\P ";  
+char const *default_ps1 = "\\e[32;1m\\u@\\h\\e[0m[\\e[34m\\w\\e[0m] \\P ";
 
 typedef int(*Program)(int argc, char **argv);
 
@@ -102,9 +102,9 @@ int builtin_help(int argc, char **argv)
       }
 
     printf(
-      BRIGHT_WHITE "%s" 
+      BRIGHT_WHITE "%s"
       BRIGHT_RED " does not have help page or is not a builtin command\n" COLOR_RESET, argv[1], argv[1]);
-  
+
     return EXIT_FAILURE;
   }
 }
@@ -123,7 +123,7 @@ void print_evaluated_ps1(char const *shell_exec_name, int has_root_privilages, i
       escape_next = true;
       continue;
     }
-    
+
     if (escape_next) {
       escape_next = false;
       switch (*ps1) {
@@ -134,17 +134,17 @@ void print_evaluated_ps1(char const *shell_exec_name, int has_root_privilages, i
         case 'a': putchar('\007'); break;
         case 's': fputs(shell_exec_name, stdout); break;
         case '$': putchar(has_root_privilages ? '#' : '$'); break;
-        
+
         case 'h':
         case 'H': /* hostname */
           gethostname(buffer, BUFSIZ);
           fputs(buffer, stdout);
           break;
-        
+
         case 'l': /* name of terminal shell device */
           fputs(basename(ttyname(STDOUT_FILENO)), stdout);
           break;
-        
+
         case 'u': /* username */
           fputs(getenv("USER"), stdout);
           break;
@@ -152,16 +152,16 @@ void print_evaluated_ps1(char const *shell_exec_name, int has_root_privilages, i
         case 'w': /* current working directory */
           fputs(getcwd(buffer, BUFSIZ), stdout);
           break;
-        
+
         case 'W': /* basename of current working directory */
           fputs(basename(getcwd(buffer, BUFSIZ)), stdout);
           break;
-        
+
         case 'P': /* custom: color highlighet $ or # depending on result of previous command */
-          printf("%s%c\x1b[0m", 
-            last_command_result == 0 ? GREEN : RED, 
+          printf("%s%c\x1b[0m",
+            last_command_result == 0 ? GREEN : RED,
             has_root_privilages ? '#' : '$');
-          break;  
+          break;
       }
     }
     else
@@ -203,7 +203,7 @@ Command parse_simple_command(StringView *sv)
     else if (!escape_mode && *p == '\\')
       escape_mode = true;
     else
-      escape_mode = false;    
+      escape_mode = false;
   }
 
   cmd.value.begin = sv->begin;
@@ -276,7 +276,7 @@ void print_command(Command cmd, size_t indent)
   putchar('\n');
   if (cmd.next == NULL)
     return;
-  
+
   print_command(*cmd.next, indent);
 }
 
@@ -301,7 +301,7 @@ Vector parse_path_env(char const *path)
   Vector      path_dirs;
   StringView *current;
   char const *prev = path;
- 
+
   fill(path_dirs, 0);
 
   for (; *path != '\0'; ++path)
@@ -319,7 +319,7 @@ StringView find_word(StringView command)
 {
   int escape_mode = false;
   int string_mode = false;
-  
+
   char *p = command.begin;
   char *str_begin = NULL, *str_end = NULL;
 
@@ -339,7 +339,7 @@ StringView find_word(StringView command)
     else
       escape_mode = false;
   }
-  
+
   if (str_end+1 == p) {
     command.begin = str_begin + 1;
     command.end   = str_end;
@@ -411,7 +411,7 @@ int eval_pipe(Command cmd, Vector path_dirs, int not_fork)
       for (i = 0; i < args.size; ++i)
         free(vector(char*, &args, i));
       vector_destroy(&args);
-      
+
       return status;
     }
 
@@ -466,7 +466,7 @@ int eval_pipe(Command cmd, Vector path_dirs, int not_fork)
       status = extract_exit_code_from_status(status);
 
       return cmd.type == SEMICOLON || (status == 0 ? cmd.type == AND : cmd.type == OR)
-        ? eval_pipe(*cmd.next, path_dirs, false) 
+        ? eval_pipe(*cmd.next, path_dirs, false)
         : status;
   }
 
@@ -545,8 +545,8 @@ int main(int argc, char const* *argv)
   sigemptyset(&sa.sa_mask);
   sa.sa_sigaction = handle_exit_api_sigaction;
   sa.sa_flags = SA_SIGINFO;
-  
-  /* 
+
+  /*
     sigaction is not supported by Windows Subsystem For Linux
     so we need to fallback to old API to make sure that exit works
    */
