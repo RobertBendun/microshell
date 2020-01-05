@@ -1,7 +1,7 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -ansi -O3 -Wno-unused-parameter -pedantic -Wshadow
 
-FILES = vector StringView
+FILES = vector StringView allocators
 OBJECTS = $(addprefix bin/,$(addsuffix .o,$(FILES)))
 
 bin/%.o: src/%.c
@@ -10,7 +10,7 @@ bin/%.o: src/%.c
 
 bin/microshell: $(OBJECTS) src/microshell.c
 	mkdir bin -p
-	$(CC) $(CFLAGS) -o $@ $^
+	$(CC) $(CFLAGS) -o $@ $^ -lrt
 
 run: bin/microshell
 	./bin/microshell

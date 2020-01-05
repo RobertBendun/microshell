@@ -14,4 +14,7 @@
 #include <stdint.h>
 #include <assert.h>
 
+/* Incomplete: portability */
+#define MAYBE_UNUSED __attribute__((unused))
+
 #endif

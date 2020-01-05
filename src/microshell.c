@@ -9,23 +9,63 @@
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <signal.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <pwd.h>
+#include <setjmp.h>
+#include <linux/limits.h>
 
 #include "core.h"
 #include "vector.h"
 #include "terminal.h"
 #include "StringView.h"
+#include "allocators.h"
+
+int run_command(StringView command);
 
 int builtin_exit(int argc, char **argv);
 int builtin_cd(int argc, char **argv);
 int builtin_help(int argc, char **argv);
 
-char const *default_ps1 = "\\e[32;1m\\u@\\h\\e[0m[\\e[34m\\w\\e[0m] \\P ";
+int builtin_history();
+int builtin_goto(int argc, char **argv);
+int builtin_history_clear();
+
+int builtin_replace_part_of_command(int argc, char **argv);
+
+int builtin_set(int argc, char **argv);
+int builtin_save(int argc, char **argv);
+int builtin_append(int argc, char **argv);
+
+int builtin_ps1(int argc, char **argv);
+
+char const *default_ps1 = "\\e[32;1m\\u\\e[0m[\\e[34m\\w\\e[0m]{\\!}\\P ";
 
 typedef int(*Program)(int argc, char **argv);
 
+Vector history;
+Vector path_dirs;
+InterprocessSharedMemoryAllocator isma;
+
+struct GlobalState
+{
+  int exit_code;
+  char cwd[PATH_MAX];
+  int clear_history;
+  char ps1[PATH_MAX];
+} *globals;
+
+static jmp_buf jump_buffer;
+
+typedef struct
+{
+  StringView command;
+  int exit_code;
+} HistoryEntry;
+
 struct {
   char const* name;
-  char const* description;
+  char const* syntax;
   Program handler;
   char const* help;
 } builtin_commands[] = {
@@ -49,7 +89,12 @@ struct {
     builtin_cd,
     "cd [path]\n"
     "  Changes current working directory to path.\n"
-    "  If path is not specified its defaulted to $HOME env"
+    "  if path is '" BOLD "~" COLOR_RESET "' changes cwd to user's home directory\n"
+    "  if path is '" BOLD "-" COLOR_RESET "' reads actual path from stdin\n"
+    "\n"
+    BOLD "  Example:\n" COLOR_RESET
+    "  du | cut -f2- | grep microshell | sort | cd -\n"
+    "  comand above will find microshell folder and cd to it"
   },
   {
     "help",
@@ -58,22 +103,139 @@ struct {
     "help [builtin]\n"
     "  Displays information about builtin command.\n"
     "  If builtin is not specified help prints information about microshell"
+  },
+  {
+    "history",
+    "syntax: 'history' - displays history of commands",
+    builtin_history,
+    "  Displays history of inputed commands\n"
+  },
+  {
+    "history-clear",
+    "syntax: 'history-clear' - clears commands history",
+    builtin_history_clear,
+    ""
+  },
+  {
+    "goto",
+    "syntax: 'goto [n]' - executes n entry from history",
+    builtin_goto,
+    BOLD "goto" COLOR_RESET "[n]\n"
+    "  executes n history entry. To make jump conditional use && and || operators.\n"
+    "  To compose command with jump after it's execution use ; operator.\n"
+    "\n"
+    BOLD "  Example:\n" COLOR_RESET
+    "    1: echo hello\n"
+    "    2: false && goto 1\n"
+    "    3: true && goto 1\n"
+    "    4: false || goto 1\n"
+    "    5: true || goto 1\n"
+    "\n"
+    "  Line 2 and 5 will print nothing and line 3 and 4 will print hello\n"
+  },
+  {
+    "^",
+    "syntax: '^ [text1] [text2]' - replaces first occurrence of text1 with text2 in previous command.",
+    builtin_replace_part_of_command,
+    BOLD "^" COLOR_RESET " [text1] [text2]\n"
+    "  replaces first occurrence of text1 with text2 in previous command.\n"
+  },
+  {
+    ">",
+    "syntax: '> [filename]' - saves stdin in filename",
+    builtin_save,
+    BOLD ">" COLOR_RESET " [filename]\n"
+    " saves stdin to filename."
+    "\n\n"
+    BOLD " Idiomatic use:\n" COLOR_RESET
+    "   wc -l microshell.c |> statistics.txt"
+  },
+  {
+    ">>",
+    "syntax: '>> [filename]' - appends stdin to filename",
+    builtin_append,
+    BOLD ">>" COLOR_RESET " [filename]\n"
+    " appends stdin to filename."
+    "\n\n"
+    BOLD " Idiomatic use:\n" COLOR_RESET
+    "   wc -l microshell.c |>> statistics.txt"
+  },
+  {
+    "ps1",
+    "syntax: 'ps1 [string]' - sets string as default prompt",
+    builtin_ps1,
+    BOLD "ps1" COLOR_RESET " [string]\n"
+    "  set prompt string to string\n"
+    "  available escape sequences:\n"
+    "    " BOLD "\\\\" COLOR_RESET " - print backslash\n"
+    "    " BOLD "\\e" COLOR_RESET " - escape character useful for ansi color sequences\n"
+    "    " BOLD "\\n" COLOR_RESET " - newline\n"
+    "    " BOLD "\\r" COLOR_RESET " - carrige return\n"
+    "    " BOLD "\\a" COLOR_RESET " - bell character\n"
+    "    " BOLD "\\s" COLOR_RESET " - shell exec name\n"
+    "    " BOLD "\\$" COLOR_RESET " - if user has root privilages prints #, otherwise $\n"
+    "    " BOLD "\\!" COLOR_RESET " - prints current history entry number\n"
+    "    " BOLD "\\h, \\H" COLOR_RESET " - print hostname\n"
+    "    " BOLD "\\l" COLOR_RESET " - name of terminal shell device\n"
+    "    " BOLD "\\u" COLOR_RESET " - username\n"
+    "    " BOLD "\\w" COLOR_RESET " - current working directory\n"
+    "    " BOLD "\\W" COLOR_RESET " - basename of current working directory\n"
+    "    " BOLD "\\P" COLOR_RESET " - same as \\$ but with color encoded last program result"
   }
 };
 
+static void print_help_to_command(int(*handler)(int, char**))
+{
+  unsigned i;
+  for (i = 0; i < arraylen(builtin_commands); ++i)
+    if (builtin_commands[i].handler == handler) {
+      puts(builtin_commands[i].syntax);
+      return;
+    }
+
+  puts("---- invalid handler ----");
+}
+
 int builtin_exit(int argc, char **argv)
 {
-  union sigval sigval;
-  sigval.sival_int = argc >= 2 ? atoi(argv[1]) : 0;
-  if (sigqueue(getppid(), SIGUSR1, sigval) < 0) {
-    kill(getppid(), SIGUSR1);
-  }
+  int ec = argc >= 2 ? atoi(argv[1]) : EXIT_SUCCESS;
+  globals->exit_code = ec;
+  kill(getppid(), SIGUSR1);
   return EXIT_SUCCESS;
 }
 
 int builtin_cd(int argc, char **argv)
 {
-  return chdir(argv[1]) == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+  char buffer[PATH_MAX], input_buffer[PATH_MAX];
+  struct stat s;
+  char const *input;
+
+  if (strcmp(argv[1], "-") == 0) {
+    if (fgets(input_buffer, PATH_MAX, stdin)) {
+      input_buffer[strcspn(input_buffer, "\n")] = '\0';
+    }
+    input = input_buffer;
+  }
+  else
+    input = argv[1];
+
+  if (strcmp(input, "~") == 0) {
+    strcpy(globals->cwd, ((struct passwd *)getpwuid(getuid()))->pw_dir);
+    return EXIT_SUCCESS;
+  }
+
+  if (realpath(input, buffer) == NULL && stat(buffer, &s) != 0) {
+    fprintf(stderr, BRIGHT_RED "No such file or directory.\n" COLOR_RESET);
+    return EXIT_FAILURE;
+  }
+
+  if (chdir(buffer) != 0) {
+    fprintf(stderr, BRIGHT_RED "Can't go to cd\n" COLOR_RESET);
+    return EXIT_FAILURE;
+  }
+
+  strcpy(globals->cwd, buffer);
+  return EXIT_SUCCESS;
 }
 
 int builtin_help(int argc, char **argv)
@@ -93,30 +255,179 @@ int builtin_help(int argc, char **argv)
 
     printf("list of builtins: \n");
     for (i = 0; i < arraylen(builtin_commands); ++i)
-      printf(" * %s\n    %s\n", builtin_commands[i].name, builtin_commands[i].description);
-  } else {
-    for (i = 0; i < arraylen(builtin_commands); ++i)
-      if (strcmp(builtin_commands[i].name, argv[1]) == 0) {
-        puts(builtin_commands[i].help);
-        return EXIT_SUCCESS;
-      }
+      printf(" * %s\n", builtin_commands[i].name);
 
-    printf(
-      BRIGHT_WHITE "%s"
-      BRIGHT_RED " does not have help page or is not a builtin command\n" COLOR_RESET, argv[1], argv[1]);
+    puts("To get more information type: 'help [builtin] e.g. 'help ^' or 'help exit'");
+    return EXIT_SUCCESS;
+  } 
+
+  for (i = 0; i < arraylen(builtin_commands); ++i)
+    if (strcmp(builtin_commands[i].name, argv[1]) == 0) {
+      puts(builtin_commands[i].help);
+      return EXIT_SUCCESS;
+    }
+
+  printf(
+    BRIGHT_WHITE "%s"
+    BRIGHT_RED " does not have help page or is not a builtin command\n" COLOR_RESET, argv[1]);
+
+  return EXIT_FAILURE;
+}
+
+int builtin_history()
+{
+  size_t i;
+  StringView sv;
+
+  for (i = 0; i < history.size; ++i) {
+    printf("%5ld ", i + 1);
+    sv = (vector(HistoryEntry, &history, i)).command;
+    fwrite(sv.begin, 1, strviewlen(sv), stdout);
+    puts("");
+  }
+
+  return EXIT_SUCCESS;
+}
+
+int builtin_goto(int argc, char **argv)
+{
+  size_t i;
+  int n;
+
+  if (argc == 1) {
+    print_help_to_command(builtin_goto);
+    return EXIT_FAILURE;
+  }
+  
+  n = atoi(argv[1]) - 1;
+
+  for (i = 0; i < history.size; ++i) {
+    if (i == (size_t) n)
+      return run_command((vector(HistoryEntry, &history, i)).command);
+  }
+
+  printf(BRIGHT_WHITE "goto: " RED "cannot find history entry at index: %d\n", n + 1);
+  return EXIT_FAILURE;
+}
+
+int builtin_history_clear()
+{
+  globals->clear_history = 1;
+  return EXIT_SUCCESS;
+}
+
+int builtin_set(int argc, char **argv)
+{
+  return -1 * setenv(argv[1], argv[2], true);
+}
+
+static int stdin_to_file(char const* filename, char const *mode, char const *message)
+{
+  FILE *f;
+  char buffer[BUFSIZ * 64];
+  size_t r;
+
+  if ((f = fopen(filename, mode)) == NULL) {
+    perror(message);
+    return EXIT_FAILURE;
+  }
+
+  while ((r = fread(buffer, 1, arraylen(buffer), stdin)))
+    fwrite(buffer, 1, r, f);
+
+  if (ferror(f)) {
+    fclose(f);
+    return EXIT_FAILURE;
+  }
+  fclose(f);
+  return EXIT_SUCCESS;
+}
+
+/* @Incomplate: no handling for empty argv[1] */
+int builtin_save(int argc, char **argv)
+{
+  if (argc == 1) {
+    print_help_to_command(builtin_save);
+    return EXIT_FAILURE;
+  }
+  return stdin_to_file(argv[1], "w", ">");
+}
+
+/* @Incomplate: no handling for empty argv[1] */
+int builtin_append(int argc, char **argv)
+{
+  if (argc == 1) {
+    print_help_to_command(builtin_append);
+    return EXIT_FAILURE;
+  }
+  return stdin_to_file(argv[1], "a", ">>");
+}
+
+int builtin_ps1(int argc, char **argv)
+{
+  strcpy(globals->ps1, argv[1]);
+  return EXIT_SUCCESS;
+}
+
+void wait_for_child();
+
+int builtin_replace_part_of_command(int argc, char **argv)
+{
+  StringView sv;
+  Vector new;
+  char *str, *match;
+  size_t i;
+
+  if (argc == 1) {
+    print_help_to_command(builtin_replace_part_of_command);
+    return EXIT_FAILURE;
+  }
+
+  if (history.size == 0) {
+    fprintf(stderr, BRIGHT_WHITE "microshell: "
+      RED " cannot replace text in previous command if you don't have previous command"
+      COLOR_RESET);
 
     return EXIT_FAILURE;
   }
+
+  sv = (vector(HistoryEntry, &history, history.size - 1)).command;
+  str = strview_to_cstr(sv);
+  
+  if ((match = strstr(str, argv[1])) == NULL) {
+    printf("not mached\n");
+    return EXIT_FAILURE;
+  }
+  
+  fill(new, 0);
+  vector_reserve(char, &new, strviewlen(sv));
+
+  for (i = 0; i < (size_t)(match - str); ++i)
+    vector(char, &new, i) = str[i];
+
+  for (i = 0; i < strlen(argv[2]); ++i)
+    vector(char, &new, new.size) = argv[2][i];
+  
+  match += strlen(argv[1]);
+  for (; *match != '\0'; ++match)
+    vector(char, &new, new.size) = *match;
+
+  vector(char, &new, new.size) = '\0';
+
+  sv.begin = new.data;
+  sv.end   = new.data + new.size;
+
+  atexit(wait_for_child);
+  return run_command(sv);
 }
 
 void print_evaluated_ps1(char const *shell_exec_name, int has_root_privilages, int last_command_result)
 {
   int escape_next = false;
   char buffer[BUFSIZ];
-
-  char const *ps1 = getenv("PS1");
-  if (!ps1)
-    ps1 = default_ps1;
+  char const *ps1 = globals->ps1;
+  char const *path;
+  
 
   for (; *ps1 != '\0'; ++ps1) {
     if (*ps1 == '\\') {
@@ -134,6 +445,7 @@ void print_evaluated_ps1(char const *shell_exec_name, int has_root_privilages, i
         case 'a': putchar('\007'); break;
         case 's': fputs(shell_exec_name, stdout); break;
         case '$': putchar(has_root_privilages ? '#' : '$'); break;
+        case '!': printf("%lu", history.size + 1); break;
 
         case 'h':
         case 'H': /* hostname */
@@ -150,7 +462,10 @@ void print_evaluated_ps1(char const *shell_exec_name, int has_root_privilages, i
           break;
 
         case 'w': /* current working directory */
-          fputs(getcwd(buffer, BUFSIZ), stdout);
+          if (strstr(globals->cwd, (path = ((struct passwd *)getpwuid(getuid()))->pw_dir)) == globals->cwd)
+            printf("~%s", globals->cwd + strlen(path));
+          else
+            fputs(globals->cwd, stdout);
           break;
 
         case 'W': /* basename of current working directory */
@@ -158,7 +473,7 @@ void print_evaluated_ps1(char const *shell_exec_name, int has_root_privilages, i
           break;
 
         case 'P': /* custom: color highlighet $ or # depending on result of previous command */
-          printf("%s%c\x1b[0m",
+          printf("%s%c" COLOR_RESET,
             last_command_result == 0 ? GREEN : RED,
             has_root_privilages ? '#' : '$');
           break;
@@ -194,9 +509,16 @@ Command parse_simple_command(StringView *sv)
   int string_mode = false;
 
   for (p = sv->begin; p != sv->end; ++p) {
-    if (!string_mode && !escape_mode)
+    if (!string_mode && !escape_mode) {
       if (*p == ';' || *p == '|' || *p == '&')
         break;
+      else if (*p == '#') {
+        cmd.value.begin = sv->begin;
+        cmd.value.end = p;
+        sv->begin = sv->end;
+        return cmd;
+      }
+    }
 
     if (!escape_mode && *p == '"')
       string_mode = !string_mode;
@@ -298,21 +620,21 @@ Command parse_command(StringView command)
 
 Vector parse_path_env(char const *path)
 {
-  Vector      path_dirs;
+  Vector      dirs;
   StringView *current;
   char const *prev = path;
 
-  fill(path_dirs, 0);
+  fill(dirs, 0);
 
   for (; *path != '\0'; ++path)
     if (*path == ':') {
-      current = &vector(StringView, &path_dirs, path_dirs.size);
+      current = &vector(StringView, &dirs, dirs.size);
       current->begin = cast(char*, prev);
       current->end = cast(char*, path);
       prev = path + 1;
    }
 
-  return path_dirs;
+  return dirs;
 }
 
 StringView find_word(StringView command)
@@ -350,7 +672,7 @@ StringView find_word(StringView command)
   return command;
 }
 
-void execute_command(Command cmd, Vector path_dirs);
+void execute_command(Command cmd);
 
 int extract_exit_code_from_status(int wait_status)
 {
@@ -392,31 +714,18 @@ Vector build_args(Command cmd, char const* cmdname, StringView word)
   return args;
 }
 
-int eval_pipe(Command cmd, Vector path_dirs, int not_fork)
+int eval_pipe(Command cmd, int not_fork)
 {
   pid_t pid;
   int status;
   int pipefd[2];
-  StringView sv;
+  MAYBE_UNUSED StringView sv;
 
   if (cmd.next == NULL) {
     simple_command:
     sv = find_word(cmd.value);
-    /* this is obscure */
-    if (strncmp(sv.begin, "cd", strviewlen(sv)) == 0) {
-      size_t i;
-      Vector args = build_args(cmd, strview_to_cstr(sv), sv);
-      status = builtin_cd(args.size, (char**)args.data);
-
-      for (i = 0; i < args.size; ++i)
-        free(vector(char*, &args, i));
-      vector_destroy(&args);
-
-      return status;
-    }
-
     if (not_fork || (pid = fork()) == 0)
-      execute_command(cmd, path_dirs);
+      execute_command(cmd);
     else {
       wait(&status);
       return extract_exit_code_from_status(status);
@@ -441,14 +750,15 @@ int eval_pipe(Command cmd, Vector path_dirs, int not_fork)
           assert(dup(pipefd[0]) >= 0);
           close(pipefd[0]);
           close(pipefd[1]);
-          eval_pipe(*cmd.next, path_dirs, true);
+          atexit(wait_for_child);
+          eval_pipe(*cmd.next, true);
         } else {
           close(1);
           assert(dup(pipefd[1]) >= 0);
           close(pipefd[0]);
           close(pipefd[1]);
           atexit(wait_for_child);
-          execute_command(cmd, path_dirs);
+          execute_command(cmd);
         }
       } else {
         wait(&status);
@@ -460,20 +770,20 @@ int eval_pipe(Command cmd, Vector path_dirs, int not_fork)
     case OR:
     case SEMICOLON:
       if ((pid = fork()) == 0)
-        execute_command(cmd, path_dirs);
+        execute_command(cmd);
 
       wait(&status);
       status = extract_exit_code_from_status(status);
 
       return cmd.type == SEMICOLON || (status == 0 ? cmd.type == AND : cmd.type == OR)
-        ? eval_pipe(*cmd.next, path_dirs, false)
+        ? eval_pipe(*cmd.next, false)
         : status;
   }
 
   return EXIT_SUCCESS;
 }
 
-void execute_command(Command cmd, Vector path_dirs)
+void execute_command(Command cmd)
 {
   char buffer[1024];
   char const *cmdname;
@@ -485,6 +795,11 @@ void execute_command(Command cmd, Vector path_dirs)
 
   word = trim(find_word(cmd.value));
   cmdname = strview_to_cstr(word); /* @Incomplete: Check if cmdname is heap allocated and if so deallocate it */
+
+  if (strchr(cmdname, '/') != NULL) {
+    strcpy(buffer, cmdname);
+    goto exec;
+  }
 
   /* check if command is builtin */
   for (i = 0; i < sizeof(builtin_commands) / sizeof(*builtin_commands); ++i) {
@@ -513,8 +828,10 @@ void execute_command(Command cmd, Vector path_dirs)
     }
   }
 
-  args = build_args(cmd, cmdname, word);
+  exec:
 
+  args = build_args(cmd, cmdname, word);
+  
   /* execute command or builtin with given args */
   if (builtin) {
     exit(builtin_commands[builtin-1].handler(args.size, (char**)args.data));
@@ -523,41 +840,90 @@ void execute_command(Command cmd, Vector path_dirs)
   }
 }
 
-void handle_exit_api_sigaction(int sig, siginfo_t *si, void *ucontext)
+void handle_exit()
 {
-  exit(si->si_value.sival_int);
+  exit(globals->exit_code);
 }
 
-void handle_exit_api_signal()
+int run_command(StringView command)
 {
-  exit(EXIT_SUCCESS);
+  int ec = EXIT_FAILURE;
+  Command cmd = parse_command(command);
+  if (cmd.value.begin != cmd.value.end)
+    ec = eval_pipe(cmd, false);
+  destroy_command(cmd);
+  return ec;
+}
+
+void clear_history()
+{
+  size_t i;
+  for (i = 0; i < history.size; ++i)
+    free((vector(HistoryEntry, &history, i)).command.begin);
+  vector_destroy(&history);
+  fill(history, 0);
+}
+
+void pass()
+{
+  longjmp(jump_buffer, 1);
+}
+
+void set_ps1()
+{
+  char const *ps1;
+  ps1 = getenv("PS1");
+  if (!ps1) 
+    ps1 = default_ps1;
+  strcpy(globals->ps1, ps1);
+}
+
+void clear_interprocess_memory()
+{
+  interprocess_shared_memory_allocator(&isma, 0, globals);
 }
 
 int main(int argc, char const* *argv)
 {
-  Command cmd;
+  HistoryEntry history_entry;
   StringView input;
-  int exit_code = 0;
 
-  Vector path_dirs = parse_path_env(getenv("PATH"));
+  memset(&isma, 0, sizeof(isma));
+  fill(history, 0);
+  path_dirs = parse_path_env(getenv("PATH"));
 
-  struct sigaction sa;
-  sigemptyset(&sa.sa_mask);
-  sa.sa_sigaction = handle_exit_api_sigaction;
-  sa.sa_flags = SA_SIGINFO;
+  if (signal(SIGUSR1, handle_exit) == SIG_ERR)
+    fprintf(stderr, "microshell: cannot register signal for exit command.\n" BRIGHT_RED "That makes exit command useless\n" COLOR_RESET);
+  
+  globals = interprocess_shared_memory_allocator(&isma, sizeof(struct GlobalState), NULL);
+  
+  while (getcwd(globals->cwd, sizeof(globals->cwd)) == NULL)
+    ;
 
-  /*
-    sigaction is not supported by Windows Subsystem For Linux
-    so we need to fallback to old API to make sure that exit works
-   */
-  if (sigaction(SIGUSR1, &sa, NULL) < 0) {
-    if (signal(SIGUSR1, handle_exit_api_signal) == SIG_ERR)
-      fprintf(stderr, "microshell: cannot register signal for exit command.\n" BRIGHT_RED "That makes exit command useless\n" COLOR_RESET);
+  signal(SIGINT, pass);
+
+  set_ps1();
+  atexit(clear_interprocess_memory);
+
+  if (setjmp(jump_buffer) != 0) {
+    setjmp(jump_buffer);
+    puts("");
   }
 
   for (;;) {
-    wait(NULL); /* added just to be sure */
-    print_evaluated_ps1(argv[0], /* has root privilages  */ geteuid() == 0, exit_code);
+    while (wait(NULL) > 0)
+      ;
+
+    if (globals->clear_history) {
+      clear_history();
+      globals->clear_history = false;
+    }
+    
+    if (chdir(globals->cwd) < 0)
+      while (getcwd(globals->cwd, sizeof(globals->cwd)) == NULL)
+        ;
+
+    print_evaluated_ps1(argv[0], /* has root privilages  */ geteuid() == 0, globals->exit_code);
     if (!(input = readline(stdin)).begin)
       break;
 
@@ -565,11 +931,12 @@ int main(int argc, char const* *argv)
     if (input.begin == input.end)
       continue;
 
-    cmd = parse_command(input);
-    exit_code = eval_pipe(cmd, path_dirs, false);
-    destroy_command(cmd);
-    free(input.begin);
+    globals->exit_code = run_command(input);
+    
+    history_entry.command = input;
+    history_entry.exit_code = globals->exit_code;
+    vector(HistoryEntry, &history, history.size) = history_entry;
   }
 
-  return 0;
+  return EXIT_SUCCESS;
 }

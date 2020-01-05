@@ -7,22 +7,29 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "vector.h"
+
 StringView readline(FILE *in)
 {
   StringView result;
-  size_t len = 0;
-  ssize_t length = 0;
+  Vector buffer;
+  char c = '\0';
 
-  result.begin = result.end = NULL;
-  memset(&result, 0, sizeof(result));
-  if ((length = getline(&(result.begin), &len, in)) < 0) {
-    perror("getline");
-    free(result.begin);
-    result.begin = result.end = NULL;
+  fill(buffer, 0);
+  fill(result, 0);
+
+  if (feof(in))
     return result;
-  }
 
-  result.end = result.begin + length;
+  while (!feof(in) && (c != '\n' && c != '\r'))
+    vector(char, &buffer, buffer.size) = c = fgetc(in);
+
+  /* shrink to fit size */
+  buffer.data = realloc(buffer.data, buffer.size);
+  buffer.data[buffer.size-1] = '\0';
+  result.begin = buffer.data;
+  result.end = buffer.data + buffer.size;
+
   return result;
 }
 
