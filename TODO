@@ -1,4 +1,0 @@
-
-## Unnecessary features
-- [ ] ``help`` command should give command specific help (for our builtin commands and other utilities). Syntax: ``help [command_or_utility]``.
-- [ ] ``help ps1`` describing ps1 format and its custom features

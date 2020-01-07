@@ -209,15 +209,25 @@ int builtin_cd(int argc, char **argv)
   char buffer[PATH_MAX], input_buffer[PATH_MAX];
   struct stat s;
   char const *input;
+  char *end;
 
   if (strcmp(argv[1], "-") == 0) {
-    if (fgets(input_buffer, PATH_MAX, stdin)) {
-      input_buffer[strcspn(input_buffer, "\n")] = '\0';
-    }
+    if (fgets(input_buffer, PATH_MAX, stdin))
+      if ((end = strchr(input_buffer, '\n')) != NULL)
+        *end = '\0';
+      else if (end == NULL) {
+        goto to_many_characters;
+      }  
     input = input_buffer;
   }
   else
     input = argv[1];
+
+  if (strlen(input) > PATH_MAX) {
+    to_many_characters:
+    fprintf(stderr, "cd: path must be at most %u bytes!\n", (unsigned) PATH_MAX);
+    return 1;
+  }
 
   if (strcmp(input, "~") == 0) {
     strcpy(globals->cwd, ((struct passwd *)getpwuid(getuid()))->pw_dir);
