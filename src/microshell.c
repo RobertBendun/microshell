@@ -211,26 +211,29 @@ int builtin_cd(int argc, char **argv)
   char const *input;
   char *end;
 
-  if (strcmp(argv[1], "-") == 0) {
-    if (fgets(input_buffer, PATH_MAX, stdin))
-      if ((end = strchr(input_buffer, '\n')) != NULL)
-        *end = '\0';
-      else if (end == NULL) {
-        goto to_many_characters;
-      }  
+  if (strcmp(argv[1], "-") != 0) {
+    input = argv[1];
+  }
+  else {
+    if (!fgets(input_buffer, PATH_MAX, stdin)) {
+      fprintf(stderr, BRIGHT_RED "Error reading path from stdin. Parhaps input is empty?" COLOR_RESET);
+      return 1;
+    }
+
+    if ((end = strchr(input_buffer, '\n')) == NULL)
+      goto to_many_characters;
+    *end = '\0';
     input = input_buffer;
   }
-  else
-    input = argv[1];
 
   if (strlen(input) > PATH_MAX) {
     to_many_characters:
-    fprintf(stderr, "cd: path must be at most %u bytes!\n", (unsigned) PATH_MAX);
+    fprintf(stderr, BRIGHT_RED "Path must be at most %u bytes!\n" COLOR_RESET, (unsigned) PATH_MAX);
     return 1;
   }
 
   if (strcmp(input, "~") == 0) {
-    strcpy(globals->cwd, ((struct passwd *)getpwuid(getuid()))->pw_dir);
+    strcpy(globals->cwd, ((struct passwd *) getpwuid(getuid()))->pw_dir);
     return EXIT_SUCCESS;
   }
 
@@ -240,7 +243,7 @@ int builtin_cd(int argc, char **argv)
   }
 
   if (chdir(buffer) != 0) {
-    fprintf(stderr, BRIGHT_RED "Can't go to cd\n" COLOR_RESET);
+    fprintf(stderr, BRIGHT_RED "No such file or directory.\n" COLOR_RESET);
     return EXIT_FAILURE;
   }
 
@@ -316,7 +319,7 @@ int builtin_goto(int argc, char **argv)
       return run_command((vector(HistoryEntry, &history, i)).command);
   }
 
-  printf(BRIGHT_WHITE "goto: " RED "cannot find history entry at index: %d\n", n + 1);
+  printf(BRIGHT_WHITE "goto: " BRIGHT_RED "cannot find history entry at index: %d\n", n + 1);
   return EXIT_FAILURE;
 }
 
@@ -721,6 +724,7 @@ Vector build_args(Command cmd, char const* cmdname, StringView word)
     cmd.value = trim(cmd.value);
   }
 
+  vector(char*, args, veclen(vector)) = NULL;
   return args;
 }
 
@@ -839,7 +843,6 @@ void execute_command(Command cmd)
   }
 
   exec:
-
   args = build_args(cmd, cmdname, word);
   
   /* execute command or builtin with given args */
