@@ -724,7 +724,7 @@ Vector build_args(Command cmd, char const* cmdname, StringView word)
     cmd.value = trim(cmd.value);
   }
 
-  vector(char*, args, veclen(vector)) = NULL;
+  /* vector(char*, &args, veclen(args)) = NULL; */
   return args;
 }
 
