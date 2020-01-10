@@ -46,6 +46,14 @@ typedef int(*Program)(int argc, char **argv);
 Vector history;
 Vector path_dirs;
 InterprocessSharedMemoryAllocator isma;
+int is_child = 0;
+
+pid_t marked_fork()
+{
+  pid_t v = fork();
+  if (!is_child) is_child = v == 0;
+  return v;
+}
 
 struct GlobalState
 {
@@ -738,7 +746,7 @@ int eval_pipe(Command cmd, int not_fork)
   if (cmd.next == NULL) {
     simple_command:
     sv = find_word(cmd.value);
-    if (not_fork || (pid = fork()) == 0)
+    if (not_fork || (pid = marked_fork()) == 0)
       execute_command(cmd);
     else {
       wait(&status);
@@ -751,14 +759,14 @@ int eval_pipe(Command cmd, int not_fork)
       goto simple_command;
 
     case PIPE:
-      if (not_fork || (pid = fork()) == 0) {
+      if (not_fork || (pid = marked_fork()) == 0) {
         /* child process for lhs of pipe operator */
         if (pipe(pipefd) < 0){
           fprintf(stderr, "Cannot open pipe to handle processes.\n");
           exit(EXIT_FAILURE);
         }
 
-        if (fork() == 0) {
+        if (marked_fork() == 0) {
           /* child process for rhs of pipe operator */
           close(0);
           assert(dup(pipefd[0]) >= 0);
@@ -783,7 +791,7 @@ int eval_pipe(Command cmd, int not_fork)
     case AND:
     case OR:
     case SEMICOLON:
-      if ((pid = fork()) == 0)
+      if ((pid = marked_fork()) == 0)
         execute_command(cmd);
 
       wait(&status);
@@ -886,7 +894,7 @@ void set_ps1()
 {
   char const *ps1;
   ps1 = getenv("PS1");
-  if (!ps1) 
+  if (!ps1)
     ps1 = default_ps1;
   strcpy(globals->ps1, ps1);
 }
@@ -919,8 +927,10 @@ int main(int argc, char const* *argv)
   atexit(clear_interprocess_memory);
 
   if (setjmp(jump_buffer) != 0) {
+    if (is_child)
+      exit(0);
     setjmp(jump_buffer);
-    puts("");
+    wait(NULL);
   }
 
   for (;;) {
