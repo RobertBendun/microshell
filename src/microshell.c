@@ -732,7 +732,7 @@ Vector build_args(Command cmd, char const* cmdname, StringView word)
     cmd.value = trim(cmd.value);
   }
 
-  /* vector(char*, &args, veclen(args)) = NULL; */
+  vector(char*, &args, veclen(args)) = NULL;
   return args;
 }
 
@@ -855,7 +855,7 @@ void execute_command(Command cmd)
   
   /* execute command or builtin with given args */
   if (builtin) {
-    exit(builtin_commands[builtin-1].handler(args.size, (char**)args.data));
+    exit(builtin_commands[builtin-1].handler(args.size - 1, (char**)args.data));
   } else {
     execv(buffer, (char**)args.data);
   }
