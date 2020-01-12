@@ -33,13 +33,12 @@ int builtin_history_clear();
 
 int builtin_replace_part_of_command(int argc, char **argv);
 
-int builtin_set(int argc, char **argv);
 int builtin_save(int argc, char **argv);
 int builtin_append(int argc, char **argv);
 
 int builtin_ps1(int argc, char **argv);
 
-char const *default_ps1 = "\\e[32;1m\\u\\e[0m[\\e[34m\\w\\e[0m]{\\!}\\P ";
+char const *default_ps1 = "\\e[32;1m\\u\\e[0m[\\e[34;1m\\w\\e[0m]{\\!}\\P ";
 
 typedef int(*Program)(int argc, char **argv);
 
@@ -335,11 +334,6 @@ int builtin_history_clear()
 {
   globals->clear_history = 1;
   return EXIT_SUCCESS;
-}
-
-int builtin_set(int argc, char **argv)
-{
-  return -1 * setenv(argv[1], argv[2], true);
 }
 
 static int stdin_to_file(char const* filename, char const *mode, char const *message)
