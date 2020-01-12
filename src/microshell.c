@@ -51,6 +51,7 @@ pid_t marked_fork()
 {
   pid_t v = fork();
   if (!is_child) is_child = v == 0;
+  if (is_child) signal(SIGINT, SIG_DFL);
   return v;
 }
 
@@ -62,7 +63,7 @@ struct GlobalState
   char ps1[PATH_MAX];
 } *globals;
 
-static jmp_buf jump_buffer;
+static sigjmp_buf jump_env;
 
 typedef struct
 {
@@ -839,6 +840,7 @@ void execute_command(Command cmd)
     }
 
     if (i == path_dirs.size) {
+      command_not_found:
       printf(BRIGHT_RED "microshell: command {" BRIGHT_WHITE "%s" BRIGHT_RED "} was not found.\n" COLOR_RESET, cmdname);
       exit(EXIT_FAILURE);
     }
@@ -852,6 +854,7 @@ void execute_command(Command cmd)
     exit(builtin_commands[builtin-1].handler(args.size - 1, (char**)args.data));
   } else {
     execv(buffer, (char**)args.data);
+    goto command_not_found;
   }
 }
 
@@ -879,9 +882,10 @@ void clear_history()
   fill(history, 0);
 }
 
-void pass()
+void return_to_main_loop(int signo)
 {
-  longjmp(jump_buffer, 1);
+  (void)signo;
+  siglongjmp(jump_env, 42);
 }
 
 void set_ps1()
@@ -915,17 +919,14 @@ int main(int argc, char const* *argv)
   while (getcwd(globals->cwd, sizeof(globals->cwd)) == NULL)
     ;
 
-  signal(SIGINT, pass);
+  signal(SIGINT, return_to_main_loop);
 
   set_ps1();
   atexit(clear_interprocess_memory);
 
-  if (setjmp(jump_buffer) != 0) {
-    if (is_child)
-      exit(0);
-    setjmp(jump_buffer);
-    wait(NULL);
-  }
+  
+  if (sigsetjmp(jump_env, 1) == 42)
+    putchar('\n');
 
   for (;;) {
     while (wait(NULL) > 0)

@@ -1,6 +1,8 @@
 ## Some bugs and incompletes 
 - builtin set is broken
 - builtin documentation is not finished
+- empty command with spaces spawns bunch microshells
+- ^ without arguments goes to last command
 
 ## Necessary improvements
 - marge allocators from ``allocators.c`` to Vector implementation.
