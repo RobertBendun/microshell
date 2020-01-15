@@ -38,6 +38,8 @@ int builtin_append(int argc, char **argv);
 
 int builtin_ps1(int argc, char **argv);
 
+int builtin_add_history_entry(int argc, char **argv);
+
 char const *default_ps1 = "\\e[32;1m\\u\\e[0m[\\e[34;1m\\w\\e[0m]{\\!}\\P ";
 
 typedef int(*Program)(int argc, char **argv);
@@ -61,6 +63,8 @@ struct GlobalState
   char cwd[PATH_MAX];
   int clear_history;
   char ps1[PATH_MAX];
+  char new_history_entry[PATH_MAX];
+  size_t new_history_index;
 } *globals;
 
 static sigjmp_buf jump_env;
@@ -189,6 +193,12 @@ struct {
     "    " BOLD "\\w" COLOR_RESET " - current working directory\n"
     "    " BOLD "\\W" COLOR_RESET " - basename of current working directory\n"
     "    " BOLD "\\P" COLOR_RESET " - same as \\$ but with color encoded last program result"
+  },
+  {
+    "+",
+    "syntax: '+ [index] [command]",
+    builtin_add_history_entry,
+    ""
   }
 };
 
@@ -386,6 +396,24 @@ int builtin_append(int argc, char **argv)
 int builtin_ps1(int argc, char **argv)
 {
   strcpy(globals->ps1, argv[1]);
+  return EXIT_SUCCESS;
+}
+
+int builtin_add_history_entry(int argc, char **argv)
+{
+  char buffer[1024];
+  char const *input;
+
+  if (argc == 2) {
+    fgets(buffer, 1024, stdin);
+    *strchr(buffer, '\n') = '\0';
+    input = buffer;
+  }
+  else
+    input = argv[2];
+
+  strcpy(globals->new_history_entry, input);
+  globals->new_history_index = atoi(argv[1]);
   return EXIT_SUCCESS;
 }
 
@@ -946,6 +974,8 @@ int main(int argc, char const* *argv)
     if (globals->clear_history) {
       clear_history();
       globals->clear_history = false;
+    } else if (globals->new_history_index > 0) {
+      printf("%d: %s\n", globals->new_history_index, globals->new_history_entry);
     }
     
     if (chdir(globals->cwd) < 0)
