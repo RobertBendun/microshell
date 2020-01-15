@@ -267,11 +267,11 @@ int builtin_help(int argc, char **argv)
     printf(
       "  _____  ____  __  __  _____ "   "   " "" "\n"
       " |  __ \\|  _ \\|  \\/  |/ ____|""   " "microshell by Robert Bendun" "\n"
-      " | |__) | |_) | \\  / | (___  "  "   " "features:" "\n"
+      " | |__) | |_) | \\  / | (___  "  "   " "  - CTRL-C signal handling" "\n"
       " |  _  /|  _ <| |\\/| |\\___ \\ ""   " "  - powerful builtin commands" "\n"
-      " | | \\ \\| |_) | |  | |____) |" "   " "  - |, || and && operators" "\n"
+      " | | \\ \\| |_) | |  | |____) |" "   " "  - |, ;, || and && operators" "\n"
       " |_|  \\_\\____/|_|  |_|_____/ " "   " "  - PS1 format support for nice prompt" "\n"
-      "\n"
+      "                               "   "   " "- string quoting\n"
     );
 
     printf("list of builtins: \n");
@@ -584,6 +584,13 @@ Command parse_pipe(StringView sv)
     sv.begin += 1;
     lhs.next = copy_to_heap(parse_pipe(trim(sv)));
     lhs.type = SEMICOLON;
+  }
+
+  if (lhs.next && lhs.next->value.begin == lhs.next->value.end) {
+    fprintf(stderr, BRIGHT_RED "microshell: syntax error - unexpected end of the line\n" COLOR_RESET);
+    lhs.type = None;
+    lhs.value.end = lhs.value.begin;
+    free(lhs.next);
   }
 
   return lhs;
