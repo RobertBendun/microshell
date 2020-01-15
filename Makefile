@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -ansi -O3 -Wno-unused-parameter -pedantic -Wshadow
+CFLAGS = -Wall -Wextra -ansi -O3 -Wno-unused-parameter -Wno-overlength-strings -pedantic -Wshadow
 
 FILES = vector StringView allocators
 OBJECTS = $(addprefix bin/,$(addsuffix .o,$(FILES)))

@@ -219,6 +219,9 @@ int builtin_cd(int argc, char **argv)
   char const *input;
   char *end;
 
+  if (argc == 1)
+    goto go_home;
+
   if (strcmp(argv[1], "-") != 0) {
     input = argv[1];
   }
@@ -241,6 +244,7 @@ int builtin_cd(int argc, char **argv)
   }
 
   if (strcmp(input, "~") == 0) {
+    go_home:
     strcpy(globals->cwd, ((struct passwd *) getpwuid(getuid()))->pw_dir);
     return EXIT_SUCCESS;
   }
@@ -889,10 +893,10 @@ void clear_history()
   fill(history, 0);
 }
 
-void return_to_main_loop(int signo)
+void return_to_main_loop(int signal_number)
 {
-  (void)signo;
-  siglongjmp(jump_env, 42);
+  (void)signal_number;
+  siglongjmp(jump_env, 0xdeadbeef);
 }
 
 void set_ps1()
@@ -932,7 +936,7 @@ int main(int argc, char const* *argv)
   atexit(clear_interprocess_memory);
 
   
-  if (sigsetjmp(jump_env, 1) == 42)
+  if (sigsetjmp(jump_env, 1) == (int)0xdeadbeef)
     putchar('\n');
 
   for (;;) {
