@@ -14,12 +14,339 @@
 #include <pwd.h>
 #include <setjmp.h>
 #include <linux/limits.h>
+#include <stdint.h>
+#include <assert.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <assert.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <errno.h>
 
-#include "core.h"
-#include "vector.h"
-#include "terminal.h"
-#include "StringView.h"
-#include "allocators.h"
+#define false (!!0)
+#define true  (!false)
+
+#define cast(type, value) ((type)(value))
+
+
+#define fill(var, val) (memset(&(var), val, sizeof(var)))
+
+#define arraylen(a) (sizeof(a) / sizeof(*a))
+
+
+
+/* Incomplete: portability */
+#define MAYBE_UNUSED __attribute__((unused))
+
+typedef struct
+{
+  char *data;
+  size_t capacity;
+  size_t size;
+} Vector;
+
+
+void  vector_destroy(Vector *vec);
+void  vector_reserve_bytes(Vector *vec, size_t minimum_capacity, size_t type_size);
+void* access_vector_element(Vector *vec, size_t n, size_t type_size);
+
+
+#define vector(type, vec, pos) *((type*) access_vector_element((vec), (pos), sizeof(type)))
+#define vector_reserve(type, vec, capacity) (vector_reserve_bytes((vec), (capacity), sizeof(type)))
+#define veclen(vec) ((vec).size)
+
+
+#define COLOR_RESET  "\x1b[0m"
+
+#define BLACK   "\x1b[30m"
+#define RED     "\x1b[31m"
+#define GREEN   "\x1b[32m"
+#define YELLOW  "\x1b[33m"
+#define BLUE    "\x1b[34m"
+#define MAGENTA "\x1b[35m"
+#define CYAN    "\x1b[36m"
+#define WHITE   "\x1b[37m"
+
+#define BRIGHT_BLACK   "\x1b[30;1m"
+#define BRIGHT_RED     "\x1b[31;1m"
+#define BRIGHT_GREEN   "\x1b[32;1m"
+#define BRIGHT_YELLOW  "\x1b[33;1m"
+#define BRIGHT_BLUE    "\x1b[34;1m"
+#define BRIGHT_MAGENTA "\x1b[35;1m"
+#define BRIGHT_CYAN    "\x1b[36;1m"
+#define BRIGHT_WHITE   "\x1b[37;1m"
+
+#define BOLD      "\x1b[1m"
+#define UNDERLINE "\x1b[4m"
+#define REVERSED  "\x1b[7m"
+
+#define CLEAR_SCREEN "\x1b[1;1H\x1b[2J"
+
+
+typedef struct {
+  char *begin;
+  char *end;
+} StringView;
+
+#define strviewlen(strview) ((strview).end - (strview).begin)
+
+StringView readline(FILE *in);
+int strview_str_cmp(StringView sv, char const* str);
+int try_match(StringView sv, char const *str);
+StringView trim(StringView sv);
+char* strview_to_cstr(StringView sv);
+
+typedef struct 
+{
+  int shared_memory_fd;
+  void* allocated_memory;
+  size_t allocated_memory_length;
+  int id;
+} InterprocessSharedMemoryAllocator;
+
+
+void* malloc_allocator(void *allocator_data, size_t new_size, void *old_ptr);
+void* interprocess_shared_memory_allocator(InterprocessSharedMemoryAllocator *data, size_t new_size, void *old_ptr);
+
+
+void* malloc_allocator(void *allocator_data, size_t new_size, void *old_ptr)
+{
+  if (old_ptr == NULL)
+    return malloc(new_size);
+  
+  if (new_size == 0) {
+    free(old_ptr);
+    return NULL;
+  }
+
+  return realloc(old_ptr, new_size);
+}
+
+static void write_serialized_id(char *mem, int id)
+{
+  const int range = '9' - '0' + 'z' - 'a' + 'Z' - 'A' + 3;
+  int c, p;
+  for (mem += 3; id != 0; --mem) {
+    c = id % range;
+    id /= range;
+
+    *mem = 
+      (p = c, c -= ('9' - '0' + 1)) < 0 ? p + '0' : 
+      (p = c, c -= ('z' - 'a' + 1)) < 0 ? p + 'a' : 
+      (p = c, c -= ('Z' - 'A' + 1)) < 0 ? p + 'A' : -1;
+  }
+}
+
+/*
+this allocator should be object specific - each allocated object should have own copy of InterprocessSharedMemoryAllocator struct
+ hovewer you can reuse it after original user free it.
+
+if reallocation fails NULL is returned and pointed memory is unchanged
+*/
+void* interprocess_shared_memory_allocator(InterprocessSharedMemoryAllocator *data, size_t new_size, void *old_ptr)
+{
+#if defined(__func__)
+  #define UNIQUE_PREFIX "/" __func__ "0000"
+  #define UNIQUE_PREFIX_OFF (sizeof("/" __func__) - 1)
+#elif defined(__FUNCTION__)
+  #define UNIQUE_PREFIX "/" __FUNCTION__ "0000"
+  #define UNIQUE_PREFIX_OFF (sizeof("/" __FUNCTION__) - 1)
+#elif defined(__PRETTY_FUNCTION__)
+  #define UNIQUE_PREFIX "/" __PRETTY_FUNCTION__ "0000"
+  #define UNIQUE_PREFIX_OFF (sizeof("/" __PRETTY_FUNCTION__) - 1)
+#else
+  #define UNIQUE_PREFIX "/" "bendun_interprocess_shared_memory_allocator" "0000"
+  #define UNIQUE_PREFIX_OFF (sizeof("/" "bendun_interprocess_shared_memory_allocator") - 1)
+#endif
+
+  static int id = 0;
+  char buffer[] = UNIQUE_PREFIX;
+  void *remaped;
+
+ 
+  if (old_ptr == NULL) {
+    open_with_unique_name:
+    data->id = ++id;
+    write_serialized_id(buffer + UNIQUE_PREFIX_OFF, data->id);
+    if ((data->shared_memory_fd = shm_open(buffer, O_RDWR | O_CREAT | O_EXCL, 0666)) < 0) {
+      if (errno == EEXIST)
+        goto open_with_unique_name;
+      return NULL;
+    }
+
+    if (ftruncate(data->shared_memory_fd, new_size) < 0) {
+      shm_unlink(buffer);
+      return NULL;
+    }
+
+    data->allocated_memory_length = new_size;
+    data->allocated_memory = mmap(NULL, new_size, PROT_READ | PROT_WRITE, MAP_SHARED, data->shared_memory_fd, 0);
+    if (data->allocated_memory == MAP_FAILED) {
+      shm_unlink(buffer);
+      return NULL;
+    }
+    
+    return data->allocated_memory;
+  }
+
+  if (new_size == 0) {
+    write_serialized_id(buffer + UNIQUE_PREFIX_OFF, data->id);
+    munmap(data->allocated_memory, data->allocated_memory_length);
+    shm_unlink(buffer);
+    return NULL;
+  }
+
+  if (ftruncate(data->shared_memory_fd, new_size) < 0)
+    return NULL;
+  
+  data->allocated_memory_length = new_size;
+  if ((remaped = mremap(old_ptr, data->allocated_memory_length, new_size, MREMAP_MAYMOVE | MAP_SHARED)) == MAP_FAILED)
+    return NULL;
+  return data->allocated_memory = remaped;
+
+#undef UNIQUE_PREFIX
+#undef UNIQUE_PREFIX_OFF
+}
+
+static uint32_t most_significant_bit_u32(uint32_t n)
+{
+  n |= n >> (1u << 0);
+  n |= n >> (1u << 1);
+  n |= n >> (1u << 2);
+  n |= n >> (1u << 3);
+  n |= n >> (1u << 4);
+
+  return ((n + 1) >> 1);
+}
+
+static size_t(*const most_significant_bit_size_t)(size_t) = 
+  (size_t(*const)(size_t))most_significant_bit_u32;
+
+static int is_only_one_bit_set(uint64_t b)
+{
+  return b && !(b & (b-1));
+}
+
+void vector_reserve_bytes(Vector *vec, size_t minimum_capacity, size_t type_size)
+{
+  char *new;
+  size_t new_capacity;
+
+  /*
+    if only one of bits of min_capacity is set then min_capacity is power of 2 - capacity that we want
+    otherwise we have to compute it
+  */
+  if (is_only_one_bit_set(minimum_capacity))
+    new_capacity = minimum_capacity;
+  else
+    new_capacity = most_significant_bit_size_t(minimum_capacity) << 1;
+  
+  new = calloc(new_capacity, type_size);
+  memmove(new, vec->data, vec->capacity * type_size);
+  free(vec->data);
+
+  vec->data = new;
+  vec->capacity = new_capacity;
+}
+
+void* access_vector_element(Vector *vec, size_t n, size_t type_size)
+{
+  if (n >= vec->size)
+    vec->size = n + 1;
+  
+  if (n >= vec->capacity)
+    vector_reserve_bytes(vec, n+1, type_size);
+
+  return vec->data + type_size * n;
+}
+
+void vector_destroy(Vector *vec)
+{
+  if (vec->data)
+    free(vec->data);
+}
+
+StringView readline(FILE *in)
+{
+  StringView result;
+  Vector buffer;
+  char c = '\0';
+
+  fill(buffer, 0);
+  fill(result, 0);
+
+  if (feof(in))
+    return result;
+
+  while (!feof(in) && (c != '\n' && c != '\r'))
+    vector(char, &buffer, buffer.size) = c = fgetc(in);
+
+  /* shrink to fit size */
+  buffer.data = realloc(buffer.data, buffer.size);
+  buffer.data[buffer.size-1] = '\0';
+  result.begin = buffer.data;
+  result.end = buffer.data + buffer.size;
+
+  return result;
+}
+
+StringView trim(StringView sv)
+{
+  while (sv.begin != sv.end && (*sv.begin == ' ' || *sv.begin == '\t'))
+    ++sv.begin;
+  
+  while (sv.begin != sv.end && (*(sv.end - 1) == ' ' || *(sv.end - 1) == '\t'))
+    --sv.end;
+
+  return sv;
+}
+
+int strview_str_cmp(StringView sv, char const* str)
+{
+  while (sv.begin != sv.end) {
+    if (*sv.begin != *str)
+      break;
+    ++sv.begin;
+    ++str;
+  }
+
+  if (sv.begin == sv.end)
+    return  *str == '\0' ? 0 : -1;
+
+  return ((unsigned char)*sv.begin) - ((unsigned char)*str);
+}
+
+int try_match(StringView sv, char const *str)
+{
+  int i = 0;
+
+  size_t count = 0;
+  size_t len = strlen(str);
+
+  for (i = 0; sv.begin != sv.end && str[i] != '\0'; ++i)
+    if (sv.begin[i] == str[i])
+      ++count;
+    else {
+      count = 0;
+      break;
+    }
+
+  return count == len;
+}
+
+char* strview_to_cstr(StringView sv)
+{
+  char *str = malloc(strviewlen(sv) + 1);
+  str[strviewlen(sv)] = '\0';
+  memcpy(str, sv.begin, strviewlen(sv));
+  return str;
+}
+
 
 int run_command(StringView command);
 
