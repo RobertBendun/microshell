@@ -11,16 +11,15 @@ typedef ptrdiff_t KeyValue;
 #define fst(kv) ((kv)[0])
 #define snd(kv) ((kv)[1])
 
-void map_insert(Vector *dict, ptrdiff_t key, ptrdiff_t value)
+ptrdiff_t* map_insert(Vector *dict, ptrdiff_t key, ptrdiff_t value)
 {
   size_t i, j;
   size_t const vec_size = veclen(*dict);
 
   if (vec_size == 0) {
-    vector_reserve(ptrdiff_t, dict, 2);
-    vector(ptrdiff_t, dict, 0) = key;
     vector(ptrdiff_t, dict, 1) = value;
-    return;
+    vector(ptrdiff_t, dict, 0) = key;
+    return dict->data;
   }
 
   for (i = 0; i < vec_size; i += 2)
@@ -28,12 +27,14 @@ void map_insert(Vector *dict, ptrdiff_t key, ptrdiff_t value)
       break;
 
   for (j = vec_size; j > i; j -= 2) {
-    vector(ptrdiff_t, dict, j + 0) = vector(ptrdiff_t, dict, j - 2);
     vector(ptrdiff_t, dict, j + 1) = vector(ptrdiff_t, dict, j - 1);
+    vector(ptrdiff_t, dict, j + 0) = vector(ptrdiff_t, dict, j - 2);
   }
 
   vector(ptrdiff_t, dict, i + 0) = key;
   vector(ptrdiff_t, dict, i + 1) = value;
+
+  return &vector(ptrdiff_t, dict, i);
 }
 
 ptrdiff_t* map_search(Vector *dict, ptrdiff_t key)
@@ -41,10 +42,20 @@ ptrdiff_t* map_search(Vector *dict, ptrdiff_t key)
   size_t l, r, m;
   ptrdiff_t *mid;
 
+  if (veclen(*dict) == 0)
+    return NULL;
+  
+  if (*(mid = &vector(ptrdiff_t, dict, 0)) == key || *(mid = &vector(ptrdiff_t, dict, veclen(*dict) - 2)) == key)
+    return mid;
+
   for (l = 0, r = veclen(*dict) - 2; l <= r; ) {
     m = (l + r) / 2;
+    m -= m & 1;
     mid = &vector(ptrdiff_t, dict, m);
     
+    printf("pos: %zu %zu %zu\n", l, m, r);
+    printf("val: %zd\n", *mid);
+
     if (*mid == key)
       return mid;
     else if (*mid < key)
@@ -53,7 +64,6 @@ ptrdiff_t* map_search(Vector *dict, ptrdiff_t key)
       r = m - 2;
   }
 
-  fprintf(stderr, "none\n");
   return NULL;
 }
 
@@ -77,16 +87,31 @@ void test()
       if (keys[j] == keys[i])
         goto make_new;
 
-    values[i] = random_value();    
+    values[i] = random_value();
   }
 
-  for (i = 0; i < 100; ++i)
-    map_insert(&dict, keys[i], values[i]);
+  for (i = 0; i < 100; ++i) {
+    kv = map_insert(&dict, keys[i], values[i]);
+    if (*kv != keys[i]) {
+      printf("invalid insert: %zd\n", *kv);
+      return;
+    }
+  }
+
+  for (i = 0; i < veclen(dict); i += 2) {
+    printf("%zd ", ((ptrdiff_t*)dict.data)[i]);
+  }
+  puts("\n");
 
   for (i = 0; i < 100; ++i) {
-    assert((kv = map_search(&dict, keys[i])) != NULL);
-    assert(fst(kv) == keys[i]);
-    assert(snd(kv) == values[i]);
+    if ((kv = map_search(&dict, keys[i])) != NULL) {
+      assert(fst(kv) == keys[i]);
+      assert(snd(kv) == values[i]);
+    }
+    else {
+      fprintf(stderr, "Invalid key %zd\n", keys[i]);
+      return;
+    }
   }
 }
 

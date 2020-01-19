@@ -20,6 +20,7 @@
 #include "terminal.h"
 #include "StringView.h"
 #include "allocators.h"
+#include "map.h"
 
 int run_command(StringView command);
 
@@ -40,6 +41,8 @@ int builtin_ps1(int argc, char **argv);
 
 int builtin_add_history_entry(int argc, char **argv);
 
+int builtin_var(int argc, char **argv);
+
 char const *default_ps1 = "\\e[32;1m\\u\\e[0m[\\e[34;1m\\w\\e[0m]{\\!}\\P ";
 
 typedef int(*Program)(int argc, char **argv);
@@ -48,6 +51,7 @@ Vector history;
 Vector path_dirs;
 InterprocessSharedMemoryAllocator isma;
 int is_child = 0;
+int history_index = 0;
 
 pid_t marked_fork()
 {
@@ -199,6 +203,12 @@ struct {
     "syntax: '+ [index] [command]",
     builtin_add_history_entry,
     ""
+  },
+  {
+    "var",
+    "",
+    builtin_var,
+    ""
   }
 };
 
@@ -312,13 +322,11 @@ int builtin_help(int argc, char **argv)
 int builtin_history()
 {
   size_t i;
-  StringView sv;
+  ptrdiff_t *kv;
 
-  for (i = 0; i < history.size; ++i) {
-    printf("%5ld ", i + 1);
-    sv = (vector(HistoryEntry, &history, i)).command;
-    fwrite(sv.begin, 1, strviewlen(sv), stdout);
-    puts("");
+  for (i = 0; i < veclen(history); i += 2) {
+    kv = &vector(ptrdiff_t, &history, i);
+    printf("%4ld\t%s\n", fst(kv), (char*)snd(kv));
   }
 
   return EXIT_SUCCESS;
@@ -328,19 +336,22 @@ int builtin_goto(int argc, char **argv)
 {
   size_t i;
   int n;
+  ptrdiff_t *kv;
+  StringView sv;
 
   if (argc == 1) {
     print_help_to_command(builtin_goto);
     return EXIT_FAILURE;
   }
   
-  n = atoi(argv[1]) - 1;
+  n = atoi(argv[1]);
 
-  for (i = 0; i < history.size; ++i) {
-    if (i == (size_t) n)
-      return run_command((vector(HistoryEntry, &history, i)).command);
+  kv = map_search(&history, n);
+  if (kv != NULL) {
+    sv.begin = snd(kv);
+    sv.end = sv.begin + strlen(sv.begin);
+    return run_command(sv);
   }
-
   printf(BRIGHT_WHITE "goto: " BRIGHT_RED "cannot find history entry at index: %d\n", n + 1);
   return EXIT_FAILURE;
 }
@@ -469,6 +480,11 @@ int builtin_replace_part_of_command(int argc, char **argv)
   return run_command(sv);
 }
 
+int builtin_var(int argc, char **argv)
+{
+  
+}
+
 void print_evaluated_ps1(char const *shell_exec_name, int has_root_privilages, int last_command_result)
 {
   int escape_next = false;
@@ -493,7 +509,7 @@ void print_evaluated_ps1(char const *shell_exec_name, int has_root_privilages, i
         case 'a': putchar('\007'); break;
         case 's': fputs(shell_exec_name, stdout); break;
         case '$': putchar(has_root_privilages ? '#' : '$'); break;
-        case '!': printf("%lu", history.size + 1); break;
+        case '!': printf("%d", history_index + 1); break;
 
         case 'h':
         case 'H': /* hostname */
@@ -915,10 +931,12 @@ int run_command(StringView command)
 void clear_history()
 {
   size_t i;
-  for (i = 0; i < history.size; ++i)
-    free((vector(HistoryEntry, &history, i)).command.begin);
+  for (i = 1; i < history.size; i += 2)
+    free(vector(ptrdiff_t, &history, i));
+  
   vector_destroy(&history);
   fill(history, 0);
+  history_index = 0;
 }
 
 void return_to_main_loop(int signal_number)
@@ -943,8 +961,7 @@ void clear_interprocess_memory()
 
 int main(int argc, char const* *argv)
 {
-  HistoryEntry history_entry;
-  StringView input;
+  StringView sv, input;
 
   memset(&isma, 0, sizeof(isma));
   fill(history, 0);
@@ -958,7 +975,7 @@ int main(int argc, char const* *argv)
   while (getcwd(globals->cwd, sizeof(globals->cwd)) == NULL)
     ;
 
-  signal(SIGINT, return_to_main_loop);
+  signal(SIGINT, return_to_main_loop);ps aux
 
   set_ps1();
   atexit(clear_interprocess_memory);
@@ -976,6 +993,11 @@ int main(int argc, char const* *argv)
       globals->clear_history = false;
     } else if (globals->new_history_index > 0) {
       printf("%d: %s\n", globals->new_history_index, globals->new_history_entry);
+      sv.begin = globals->new_history_entry;
+      sv.end = sv.begin + strlen(sv.begin);
+      map_insert(&history, globals->new_history_index, strview_to_cstr(sv));
+      globals->new_history_index = 0;
+      --history_index;
     }
     
     if (chdir(globals->cwd) < 0)
@@ -991,10 +1013,8 @@ int main(int argc, char const* *argv)
       continue;
 
     globals->exit_code = run_command(input);
-    
-    history_entry.command = input;
-    history_entry.exit_code = globals->exit_code;
-    vector(HistoryEntry, &history, history.size) = history_entry;
+    input.begin[input.end - input.begin] = '\0';
+    map_insert(&history, ++history_index, input.begin);
   }
 
   return EXIT_SUCCESS;
