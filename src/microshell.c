@@ -31,6 +31,8 @@ int builtin_help(int argc, char **argv);
 int builtin_history();
 int builtin_goto(int argc, char **argv);
 int builtin_history_clear();
+int builtin_history_load(int argc, char **argv);
+int builtin_history_save(int argc, char **argv);
 
 int builtin_replace_part_of_command(int argc, char **argv);
 
@@ -69,16 +71,24 @@ pid_t marked_fork()
 
 enum VariableCommand
 {
-  NoCommand,
+  NoVariableCommand,
   SetVariable,
   MathOperation
+};
+
+enum HistoryCommand
+{
+  NoHistoryCommand,
+  ClearHistory,
+  LoadHistory,
+  SetHistoryIndex
 };
 
 struct GlobalState
 {
   int exit_code;
   char cwd[PATH_MAX];
-  int clear_history;
+  enum HistoryCommand history_command;
   char ps1[PATH_MAX];
   char text[PATH_MAX];
   char optional_text[PATH_MAX];
@@ -152,6 +162,21 @@ struct {
     BOLD "history-clear \n" COLOR_RESET
     "  Removes history content leaving nothing behind.\n"
     "  Next command will have index 1 in history.",
+    ""
+  },
+  {
+    "history-load",
+    "syntax: 'history-load [filename] - loads history from file\n",
+    builtin_history_load,
+    BOLD "history-load" COLOR_RESET,
+    ""
+  },
+  {
+    "history-save",
+    "syntax: 'history-save [filename] - saves commands history to filename",
+    builtin_history_save,
+    BOLD "history-save" COLOR_RESET " [filename]\n"
+    "  Saves history to file specified by filename.",
     ""
   },
   {
@@ -407,7 +432,40 @@ int builtin_goto(int argc, char **argv)
 
 int builtin_history_clear()
 {
-  globals->clear_history = 1;
+  globals->history_command = ClearHistory;
+  return EXIT_SUCCESS;
+}
+
+int builtin_history_load(int argc, char **argv)
+{
+  globals->history_command = LoadHistory;
+  strcpy(globals->text, argv[1]);
+  return EXIT_SUCCESS;
+}
+
+int builtin_history_save(int argc, char **argv)
+{
+  size_t i;
+  ptrdiff_t *kv;
+  FILE *f;
+
+  if (argc == 1) {
+    print_help_to_command(builtin_history_save);
+    return EXIT_FAILURE;
+  }
+
+  if ((f = fopen(argv[1], "w")) == NULL) {
+    perror("history-save");
+    return EXIT_FAILURE;
+  }
+
+  fprintf(f, "%ld\n", veclen(history) / 2);
+
+  for (i = 0; i < veclen(history); i += 2) {
+    kv = &vector(ptrdiff_t, &history, i);
+    fprintf(f, "%ld %s\n", kv[0], (char const*) kv[1]);
+  }
+  fclose(f);
   return EXIT_SUCCESS;
 }
 
@@ -1068,6 +1126,37 @@ void clear_history()
   history_index = 0;
 }
 
+#define MAX(a, b) ((a) >= (b) ? (a) : (b))
+
+int load_history(char const *filename) 
+{
+  size_t i, n, r;
+  FILE *f;
+  ptrdiff_t v, *kv;
+  StringView sv, cpy;
+
+  if ((f = fopen(filename, "r")) == 0) {
+    perror("history-load");
+    return EXIT_FAILURE;
+  }
+
+  fscanf(f, "%zu\n", &n);
+  vector_reserve(ptrdiff_t, &history, MAX(history.capacity, n));
+
+  for (i = 0; i < n; ++i) {
+    cpy = sv = readline(f);
+    cpy.begin = 1 + strchr(sv.begin, ' ');
+    sscanf(sv.begin, "%ld ", &v);
+    if ((kv = map_search(&history, v)) != NULL)
+      free(kv[1]);
+    map_insert(&history, v, strview_to_cstr(cpy));
+    free(sv.begin);
+  }
+
+  fclose(f);
+  return EXIT_SUCCESS;
+}
+
 void return_to_main_loop(int signal_number)
 {
   (void)signal_number;
@@ -1098,6 +1187,7 @@ void set_env_if_present()
 int main(int argc, char const* *argv)
 {
   StringView sv, input;
+  ptrdiff_t *kv;
 
   memset(&isma, 0, sizeof(isma));
   fill(history, 0);
@@ -1124,18 +1214,24 @@ int main(int argc, char const* *argv)
     while (wait(NULL) > 0)
       ;
 
-    if (globals->clear_history) {
+    if (globals->history_command == ClearHistory) {
       clear_history();
-      globals->clear_history = false;
+      globals->history_command = NoHistoryCommand;
+    } else if (globals->history_command == LoadHistory) {
+      globals->exit_code = load_history(globals->text);
+      globals->history_command = NoHistoryCommand;
     } else if (globals->new_history_index > 0) {
       sv.begin = globals->text;
       sv.end = sv.begin + strlen(sv.begin);
+      if ((kv = map_search(&history, globals->new_history_index)) != NULL) {
+        free(kv[1]);
+      }
       map_insert(&history, globals->new_history_index, strview_to_cstr(sv));
       globals->new_history_index = 0;
       --history_index;
     } else {
       set_env_if_present();
-      globals->variableCommand = NoCommand;
+      globals->variableCommand = NoVariableCommand;
     }
     
     if (chdir(globals->cwd) < 0)
