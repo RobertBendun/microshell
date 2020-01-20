@@ -100,52 +100,58 @@ struct {
   char const* syntax;
   Program handler;
   char const* help;
+  char const* more_help;
 } builtin_commands[] = {
   {
     "exit",
     "syntax: 'exit [exit_code]' if exit_code is not specified 0 is returned.",
     builtin_exit,
-    "exit [N]\n"
+    BOLD "exit" COLOR_RESET " [N]\n"
     "  Exit the shell.\n"
     "\n"
     "  Exits the shell with a status of N. If n is omitted,\n"
-    "  the exit status is defaulted to 0\n"
-    "\n"
-    "Known bug:\n"
-    "  on Windows Subsystem For Linux sigaction is not implemented.\n"
-    "  With current design, on WSL exit code is always 0, regardless N parameter"
+    "  the exit status is defaulted to 0",
+    ""
   },
   {
     "cd",
     "syntax: 'cd [path]' changes current working directory to path",
     builtin_cd,
-    "cd [path]\n"
+    BOLD "cd" COLOR_RESET " [path]\n"
     "  Changes current working directory to path.\n"
-    "  if path is '" BOLD "~" COLOR_RESET "' changes cwd to user's home directory\n"
-    "  if path is '" BOLD "-" COLOR_RESET "' reads actual path from stdin\n"
+    "  If path is '" BOLD "~" COLOR_RESET "' changes cwd to user's home directory.\n"
+    "  If path is '" BOLD "-" COLOR_RESET "' reads actual path from stdin.\n"
     "\n"
     BOLD "  Example:\n" COLOR_RESET
     "  du | cut -f2- | grep microshell | sort | cd -\n"
-    "  comand above will find microshell folder and cd to it"
+    "  comand above will find microshell folder and cd to it",
+    ""
   },
   {
     "help",
     "syntax: 'help [builtin]' prints help about microshell or describes builtin command if specified",
     builtin_help,
-    "help [builtin]\n"
+    BOLD "help" COLOR_RESET " [builtin]\n"
     "  Displays information about builtin command.\n"
-    "  If builtin is not specified help prints information about microshell"
+    "  If builtin is not specified help prints information about microshell.",
+    ""
   },
   {
     "history",
     "syntax: 'history' - displays history of commands",
     builtin_history,
-    "  Displays history of inputed commands\n"
+    BOLD "history" COLOR_RESET
+    "  Useful utility with scripting potential (Commodore64 BASIC style).\n"
+    "  Displays history of inputed or added commands in increasing order",
+    ""
   },
   {
     "history-clear",
     "syntax: 'history-clear' - clears commands history",
     builtin_history_clear,
+    BOLD "history-clear \n" COLOR_RESET
+    "  Removes history content leaving nothing behind.\n"
+    "  Next command will have index 1 in history.",
     ""
   },
   {
@@ -153,7 +159,8 @@ struct {
     "syntax: 'goto [n]' - executes n entry from history",
     builtin_goto,
     BOLD "goto" COLOR_RESET "[n]\n"
-    "  executes n history entry. To make jump conditional use && and || operators.\n"
+    "  executes n history entry.\n"
+    "  To make jump conditional use && and || operators.\n"
     "  To compose command with jump after it's execution use ; operator.\n"
     "\n"
     BOLD "  Example:\n" COLOR_RESET
@@ -163,48 +170,53 @@ struct {
     "    4: false || goto 1\n"
     "    5: true || goto 1\n"
     "\n"
-    "  Line 2 and 5 will print nothing and line 3 and 4 will print hello\n"
+    "  Line 2 and 5 will print nothing and line 3 and 4 will print hello",
+    ""
   },
   {
     "^",
     "syntax: '^ [text1] [text2]' - replaces first occurrence of text1 with text2 in previous command.",
     builtin_replace_part_of_command,
     BOLD "^" COLOR_RESET " [text1] [text2]\n"
-    "  replaces first occurrence of text1 with text2 in previous command.\n"
+    "  replaces first occurrence of text1 with text2 in previous command.",
+    ""
   },
   {
     ">",
     "syntax: '> [filename]' - saves stdin in filename",
     builtin_save,
     BOLD ">" COLOR_RESET " [filename]\n"
-    " saves stdin to filename."
+    "  saves stdin to filename."
     "\n\n"
     BOLD " Idiomatic use:\n" COLOR_RESET
-    "   wc -l microshell.c |> statistics.txt"
+    "   wc -l microshell.c |> statistics.txt",
+    ""
   },
   {
     ">>",
     "syntax: '>> [filename]' - appends stdin to filename",
     builtin_append,
     BOLD ">>" COLOR_RESET " [filename]\n"
-    " appends stdin to filename."
+    "  appends stdin to filename."
     "\n\n"
     BOLD " Idiomatic use:\n" COLOR_RESET
-    "   wc -l microshell.c |>> statistics.txt"
+    "   wc -l microshell.c |>> statistics.txt",
+    ""
   },
   {
     "ps1",
     "syntax: 'ps1 [string]' - sets string as default prompt",
     builtin_ps1,
     BOLD "ps1" COLOR_RESET " [string]\n"
-    "  set prompt string to string\n"
-    "  available escape sequences:\n"
+    "  set prompt string to string.\n"
+    "  If string is not specified uses default ps1.\n"
+    "  Available escape sequences:\n"
     "    " BOLD "\\\\" COLOR_RESET " - print backslash\n"
     "    " BOLD "\\e" COLOR_RESET " - escape character useful for ansi color sequences\n"
     "    " BOLD "\\n" COLOR_RESET " - newline\n"
     "    " BOLD "\\r" COLOR_RESET " - carrige return\n"
     "    " BOLD "\\a" COLOR_RESET " - bell character\n"
-    "    " BOLD "\\s" COLOR_RESET " - shell exec name\n"
+    "    " BOLD "\\s" COLOR_RESET " - shell exec name\n",
     "    " BOLD "\\$" COLOR_RESET " - if user has root privilages prints #, otherwise $\n"
     "    " BOLD "\\!" COLOR_RESET " - prints current history entry number\n"
     "    " BOLD "\\h, \\H" COLOR_RESET " - print hostname\n"
@@ -215,16 +227,37 @@ struct {
     "    " BOLD "\\P" COLOR_RESET " - same as \\$ but with color encoded last program result"
   },
   {
-    "+",
-    "syntax: '+ [index] [command]",
+    ":",
+    "syntax: ': [index] [command]",
     builtin_add_history_entry,
-    ""
+    BOLD ": [index] [command]" COLOR_RESET "\n"
+    "  sets history entry at index to command\n"
+    "  if command is not specified, command will be read from stdin."
   },
   {
     "var",
-    "",
+    "syntax: 'var [command] [param1] [param2]'",
     builtin_var,
-    ""
+    BOLD "var" COLOR_RESET "[command] [param1] [param2]\n"
+    "  general utility for enviromental variable manipulation.\n"
+    "  Math and relational operators are only defined for int32.\n"
+    "  Strings are NOT supported.\n\n"
+    "  available commands:\n"
+    "  - get - prints variable defined by param1\n"
+    "  - set - sets variable defined by param1 to either param2 if is specified\n"
+    "          or to line from stdin\n"
+    "  - {math} - prints result of math binary operation where lhs is param1\n"
+    "          and rhs is param2. If param1 or param2 begins with digit, \n",
+    "          parameter is treated as integer literal. Otherwise parameter\n"
+    "          is resolved to environment variable.\n"
+    "          Available operators: +, -, *, /, %, and, or, xor\n"
+    "  - {rel} - returns from program comparison result (0 is true, 1 is false).\n"
+    "          Treats parameters like math operators described above.\n"
+    "          Available operators: ==, !=, >, <, >=, <=\n\n"
+    "  Example:\n"
+    "  1: var set a 10\n"
+    "  2: var + a 1 | var set a\n"
+    "  Line 1 will set variable a to 10 and line 2 will increment variable a.\n"
   }
 };
 
@@ -306,7 +339,7 @@ int builtin_help(int argc, char **argv)
   if (argc == 1) {
     printf(
       "  _____  ____  __  __  _____ "   "   " "" "\n"
-      " |  __ \\|  _ \\|  \\/  |/ ____|""   " "microshell by Robert Bendun" "\n"
+      " |  __ \\|  _ \\|  \\/  |/ ____|""   " "microshell 1.1.0 by Robert Bendun" "\n"
       " | |__) | |_) | \\  / | (___  "  "   " "  - CTRL-C signal handling" "\n"
       " |  _  /|  _ <| |\\/| |\\___ \\ ""   " "  - powerful builtin commands" "\n"
       " | | \\ \\| |_) | |  | |____) |" "   " "  - |, ;, || and && operators" "\n"
@@ -324,7 +357,7 @@ int builtin_help(int argc, char **argv)
 
   for (i = 0; i < arraylen(builtin_commands); ++i)
     if (strcmp(builtin_commands[i].name, argv[1]) == 0) {
-      puts(builtin_commands[i].help);
+      printf("%s%s\n", builtin_commands[i].help, builtin_commands[i].more_help);
       return EXIT_SUCCESS;
     }
 
@@ -368,7 +401,7 @@ int builtin_goto(int argc, char **argv)
     sv.end = sv.begin + strlen(sv.begin);
     return run_command(sv);
   }
-  printf(BRIGHT_WHITE "goto: " BRIGHT_RED "cannot find history entry at index: %d\n", n + 1);
+  printf(BRIGHT_WHITE "goto: " BRIGHT_RED "cannot find history entry at index: " BRIGHT_WHITE "%d\n" COLOR_RESET, n);
   return EXIT_FAILURE;
 }
 
@@ -422,7 +455,10 @@ int builtin_append(int argc, char **argv)
 
 int builtin_ps1(int argc, char **argv)
 {
-  strcpy(globals->ps1, argv[1]);
+  if (argc == 1)
+    strcpy(globals->ps1, default_ps1);
+  else
+    strcpy(globals->ps1, argv[1]);
   return EXIT_SUCCESS;
 }
 
@@ -430,6 +466,11 @@ int builtin_add_history_entry(int argc, char **argv)
 {
   char buffer[1024];
   char const *input;
+
+  if (argc == 1) {
+    print_help_to_command(builtin_add_history_entry);
+    return EXIT_FAILURE;
+  }
 
   if (argc == 2) {
     fgets(buffer, 1024, stdin);
@@ -508,7 +549,14 @@ int builtin_var(int argc, char **argv)
   StringView sv;
   size_t i;
   int r = 0;
-  char const *command = argv[1], *s;
+  char const *command, *s;
+
+  if (argc < 3) {
+    print_help: print_help_to_command(builtin_var);
+    return EXIT_FAILURE;
+  }
+
+  command = argv[1];
 
   if (strcmp(command, "get") == 0) {
     if ((s = getenv(argv[2])) == NULL)
@@ -517,7 +565,8 @@ int builtin_var(int argc, char **argv)
     printf("%s\n", s);
     return EXIT_SUCCESS;
   }
-  else if (strcmp(command, "set") == 0) {
+  
+  if (strcmp(command, "set") == 0) {
     globals->variableCommand = SetVariable;
     strcpy(globals->optional_text, argv[2]);
     if (argc <= 3) {
@@ -530,6 +579,9 @@ int builtin_var(int argc, char **argv)
     setenv(globals->optional_text, globals->text, 1);
     return EXIT_SUCCESS;
   }
+
+  if (argc < 4)
+    goto print_help;
 
 #define MATH_OP(O, X) \
   if (strcmp(command, O) == 0) { \
@@ -559,8 +611,7 @@ int builtin_var(int argc, char **argv)
 
 #undef MATH_OP
 #undef REL_OP
-
-  return EXIT_FAILURE;
+  goto print_help;
 }
 
 void print_evaluated_ps1(char const *shell_exec_name, int has_root_privilages, int last_command_result)
