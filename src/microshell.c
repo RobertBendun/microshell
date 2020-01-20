@@ -43,6 +43,9 @@ int builtin_add_history_entry(int argc, char **argv);
 
 int builtin_var(int argc, char **argv);
 
+
+void set_env_if_present();
+
 char const *default_ps1 = "\\e[32;1m\\u\\e[0m[\\e[34;1m\\w\\e[0m]{\\!}\\P ";
 
 typedef int(*Program)(int argc, char **argv);
@@ -57,9 +60,19 @@ pid_t marked_fork()
 {
   pid_t v = fork();
   if (!is_child) is_child = v == 0;
-  if (is_child) signal(SIGINT, SIG_DFL);
+  if (is_child) {
+    set_env_if_present();
+    signal(SIGINT, SIG_DFL);
+  }
   return v;
 }
+
+enum VariableCommand
+{
+  NoCommand,
+  SetVariable,
+  MathOperation
+};
 
 struct GlobalState
 {
@@ -67,8 +80,11 @@ struct GlobalState
   char cwd[PATH_MAX];
   int clear_history;
   char ps1[PATH_MAX];
-  char new_history_entry[PATH_MAX];
+  char text[PATH_MAX];
+  char optional_text[PATH_MAX];
   size_t new_history_index;
+  enum VariableCommand variableCommand;
+  char ops[3];
 } *globals;
 
 static sigjmp_buf jump_env;
@@ -423,7 +439,7 @@ int builtin_add_history_entry(int argc, char **argv)
   else
     input = argv[2];
 
-  strcpy(globals->new_history_entry, input);
+  strcpy(globals->text, input);
   globals->new_history_index = atoi(argv[1]);
   return EXIT_SUCCESS;
 }
@@ -480,9 +496,71 @@ int builtin_replace_part_of_command(int argc, char **argv)
   return run_command(sv);
 }
 
+int literal_or_env(char const *str)
+{
+  if (str[0] >= '0' && str[0] <= '9')
+    return atoi(str);
+  return atoi(getenv(str));
+}
+
 int builtin_var(int argc, char **argv)
 {
-  
+  StringView sv;
+  size_t i;
+  int r = 0;
+  char const *command = argv[1], *s;
+
+  if (strcmp(command, "get") == 0) {
+    if ((s = getenv(argv[2])) == NULL)
+      return EXIT_FAILURE;
+
+    printf("%s\n", s);
+    return EXIT_SUCCESS;
+  }
+  else if (strcmp(command, "set") == 0) {
+    globals->variableCommand = SetVariable;
+    strcpy(globals->optional_text, argv[2]);
+    if (argc <= 3) {
+      sv = readline(stdin);
+      strncpy(globals->text, sv.begin, sv.end - sv.begin + 1);
+      setenv(globals->optional_text, globals->text, 1);
+      return EXIT_SUCCESS;
+    }
+    strcpy(globals->text, argv[3]);
+    setenv(globals->optional_text, globals->text, 1);
+    return EXIT_SUCCESS;
+  }
+
+#define MATH_OP(O, X) \
+  if (strcmp(command, O) == 0) { \
+    printf("%d\n", literal_or_env(argv[2]) X literal_or_env(argv[3])); \
+    return EXIT_SUCCESS; \
+  }
+
+#define REL_OP(O, X) \
+  if (strcmp(command, O) == 0) \
+    return !(literal_or_env(argv[2]) X literal_or_env(argv[3]));
+
+  MATH_OP("+", +);
+  MATH_OP("-", -);
+  MATH_OP("*", *);
+  MATH_OP("/", /);
+  MATH_OP("%", %);
+  MATH_OP("and", &);
+  MATH_OP("or", |);
+  MATH_OP("xor", ^);
+
+  REL_OP("==", ==);
+  REL_OP("!=", !=);
+  REL_OP(">", >);
+  REL_OP("<", <);
+  REL_OP(">=", >=);
+  REL_OP("<=", <=);
+
+#undef MATH_OP
+#undef REL_OP
+
+  return EXIT_FAILURE;
 }
 
 void print_evaluated_ps1(char const *shell_exec_name, int has_root_privilages, int last_command_result)
@@ -959,6 +1037,13 @@ void clear_interprocess_memory()
   interprocess_shared_memory_allocator(&isma, 0, globals);
 }
 
+void set_env_if_present()
+{
+  if (globals->variableCommand == SetVariable) {
+    setenv(globals->optional_text, globals->text, 1);
+  }
+}
+
 int main(int argc, char const* *argv)
 {
   StringView sv, input;
@@ -975,7 +1060,7 @@ int main(int argc, char const* *argv)
   while (getcwd(globals->cwd, sizeof(globals->cwd)) == NULL)
     ;
 
-  signal(SIGINT, return_to_main_loop);ps aux
+  signal(SIGINT, return_to_main_loop);
 
   set_ps1();
   atexit(clear_interprocess_memory);
@@ -992,12 +1077,14 @@ int main(int argc, char const* *argv)
       clear_history();
       globals->clear_history = false;
     } else if (globals->new_history_index > 0) {
-      printf("%d: %s\n", globals->new_history_index, globals->new_history_entry);
-      sv.begin = globals->new_history_entry;
+      sv.begin = globals->text;
       sv.end = sv.begin + strlen(sv.begin);
       map_insert(&history, globals->new_history_index, strview_to_cstr(sv));
       globals->new_history_index = 0;
       --history_index;
+    } else {
+      set_env_if_present();
+      globals->variableCommand = NoCommand;
     }
     
     if (chdir(globals->cwd) < 0)
