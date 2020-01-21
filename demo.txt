@@ -74,3 +74,9 @@ goto 1
 
 # Exit with custom exit code
 exit 42
+
+# Yes command - faster then bash!
+yes | pv -r | |> /dev/null
+which yes
+/usr/bin/yes | pv -r |> /dev/null
+

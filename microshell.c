@@ -193,6 +193,8 @@ int builtin_var(int argc, char **argv);
 
 int builtin_defer(int argc, char **argv);
 
+int builtin_yes(int argc, char **argv);
+
 void set_env_if_present();
 
 char const *default_ps1 = "\\e[32;1m\\u\\e[0m[\\e[34;1m\\w\\e[0m]{\\!}\\P ";
@@ -347,6 +349,14 @@ struct {
     "  Line 2 and 5 will print nothing and line 3 and 4 will print hello",
     ""
   },
+  {
+    "yes",
+    "syntax: 'yes [message]' - prints message or yes",
+    builtin_yes,
+    BOLD "yes" COLOR_RESET "[message]\n"
+    "",
+    ""
+  },
   /*{
     "^",
     "syntax: '^ [text1] [text2]' - replaces first occurrence of text1 with text2 in previous command.",
@@ -457,6 +467,48 @@ static void print_help_to_command(int(*handler)(int, char**))
 
   puts("---- invalid handler ----");
 }
+
+
+#define BUFSIZE BUFSIZ * 64
+
+#ifndef DEFMSG
+#  define DEFMSG "y"
+#endif
+
+
+int builtin_yes(int argc, char **argv)
+{
+  int         i;
+  char const *str;
+  size_t      strsize;
+  char        out[BUFSIZE];
+
+  if (argc == 2) {
+    str     = argv[1];
+    strsize = strlen(str);
+  }
+  else {
+    str     = DEFMSG;
+    strsize = sizeof(DEFMSG) / sizeof(*DEFMSG);
+  }
+
+  strsize += 1; /* additional space for newline character */
+
+  for (i = 0; i < BUFSIZE; i += strsize) {
+    (void) memcpy(out + i, str, strsize);
+    out[i + strsize - 1] = '\n';
+  }
+  
+  /*
+   i becomes bufsize beacuse (strlen(str) + 1) doesn't need to be equal to BUFSIZE 
+   (it may be slightly smaller) 
+   */
+  i -= strsize;
+
+  for (;;)
+    if (write(STDOUT_FILENO, out, i)) {}
+}
+
 
 int builtin_exit(int argc, char **argv)
 {
