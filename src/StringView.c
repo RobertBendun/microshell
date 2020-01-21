@@ -21,8 +21,11 @@ StringView readline(FILE *in)
   if (feof(in))
     return result;
 
-  while (!feof(in) && (c != '\n' && c != '\r'))
-    vector(char, &buffer, buffer.size) = c = fgetc(in);
+  while (!feof(in) && (c != '\n' && c != '\r')) {
+    if ((c = fgetc(in)) == EOF)
+      break;
+    vector(char, &buffer, buffer.size) = c;
+  }
 
   /* shrink to fit size */
   buffer.data = realloc(buffer.data, buffer.size);
