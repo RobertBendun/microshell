@@ -353,9 +353,9 @@ struct {
     "yes",
     "syntax: 'yes [message]' - prints message or yes",
     builtin_yes,
-    BOLD "yes" COLOR_RESET "[message]\n"
-    "",
-    ""
+    BOLD "yes " COLOR_RESET "[message]\n"
+    "  prints repeatedly yes or message to stdout. Useful for automatic\n",
+    "  acceptation of annoying programs which asks for confirm."
   },
   /*{
     "^",
