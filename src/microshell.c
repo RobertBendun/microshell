@@ -45,6 +45,7 @@ int builtin_add_history_entry(int argc, char **argv);
 
 int builtin_var(int argc, char **argv);
 
+int builtin_defer(int argc, char **argv);
 
 void set_env_if_present();
 
@@ -53,6 +54,7 @@ char const *default_ps1 = "\\e[32;1m\\u\\e[0m[\\e[34;1m\\w\\e[0m]{\\!}\\P ";
 typedef int(*Program)(int argc, char **argv);
 
 Vector history;
+Vector defered_stack;
 Vector path_dirs;
 InterprocessSharedMemoryAllocator isma;
 int is_child = 0;
@@ -81,7 +83,8 @@ enum HistoryCommand
   NoHistoryCommand,
   ClearHistory,
   LoadHistory,
-  SetHistoryIndex
+  SetHistoryIndex,
+  AddDefferedCommand
 };
 
 struct GlobalState
@@ -257,7 +260,18 @@ struct {
     builtin_add_history_entry,
     BOLD ": [index] [command]" COLOR_RESET "\n"
     "  sets history entry at index to command\n"
-    "  if command is not specified, command will be read from stdin."
+    "  if command is not specified, command will be read from stdin.",
+    ""
+  },
+  {
+    "defer",
+    "syntax: 'defer [command]' - executes command at end of shell life.",
+    builtin_defer,
+    BOLD "defer " COLOR_RESET "[command]\n"
+    "  pushes command to defer stack\n"
+    "  if command is not specified, command will be read from stdin.\n"
+    "  Deffered command will be executed at shell exit",
+    ""
   },
   {
     "var",
@@ -517,6 +531,22 @@ int builtin_ps1(int argc, char **argv)
     strcpy(globals->ps1, default_ps1);
   else
     strcpy(globals->ps1, argv[1]);
+  return EXIT_SUCCESS;
+}
+
+int builtin_defer(int argc, char **argv)
+{
+  StringView sv;
+
+  if (argc == 1) {
+    sv = readline(stdin);
+    strncpy(globals->text, sv.begin, sv.end - sv.begin);
+  } else {
+    strcpy(globals->text, argv[1]);
+  }
+
+  globals->history_command = AddDefferedCommand;
+
   return EXIT_SUCCESS;
 }
 
@@ -1174,7 +1204,24 @@ void set_ps1()
 
 void clear_interprocess_memory()
 {
+  if (is_child)
+    return;
+
   interprocess_shared_memory_allocator(&isma, 0, globals);
+}
+
+void do_defered_commands()
+{
+  ptrdiff_t i;
+  StringView sv;
+
+  if (is_child)
+    return;
+
+  for (i = (ptrdiff_t)veclen(defered_stack); i >= 0; --i) {
+    sv = vector(StringView, &defered_stack, i);
+    (void) run_command(sv);
+  }
 }
 
 void set_env_if_present()
@@ -1188,6 +1235,7 @@ int main(int argc, char const* *argv)
 {
   StringView sv, input;
   ptrdiff_t *kv;
+  size_t size;
 
   memset(&isma, 0, sizeof(isma));
   fill(history, 0);
@@ -1205,6 +1253,7 @@ int main(int argc, char const* *argv)
 
   set_ps1();
   atexit(clear_interprocess_memory);
+  atexit(do_defered_commands);
 
   
   if (sigsetjmp(jump_env, 1) == (int)0xdeadbeef)
@@ -1214,7 +1263,14 @@ int main(int argc, char const* *argv)
     while (wait(NULL) > 0)
       ;
 
-    if (globals->history_command == ClearHistory) {
+    if (globals->history_command == AddDefferedCommand) {
+      size = strlen(globals->text);
+      sv.begin = malloc(size);
+      sv.end = sv.begin + size;
+      strcpy(sv.begin, globals->text);
+      vector(StringView, &defered_stack, veclen(defered_stack)) = sv;
+      globals->history_command = NoHistoryCommand;
+    } else if (globals->history_command == ClearHistory) {
       clear_history();
       globals->history_command = NoHistoryCommand;
     } else if (globals->history_command == LoadHistory) {
