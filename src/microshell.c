@@ -33,9 +33,9 @@ int builtin_goto(int argc, char **argv);
 int builtin_history_clear();
 int builtin_history_load(int argc, char **argv);
 int builtin_history_save(int argc, char **argv);
-
+/*
 int builtin_replace_part_of_command(int argc, char **argv);
-
+*/
 int builtin_save(int argc, char **argv);
 int builtin_append(int argc, char **argv);
 
@@ -201,14 +201,14 @@ struct {
     "  Line 2 and 5 will print nothing and line 3 and 4 will print hello",
     ""
   },
-  {
+  /*{
     "^",
     "syntax: '^ [text1] [text2]' - replaces first occurrence of text1 with text2 in previous command.",
     builtin_replace_part_of_command,
     BOLD "^" COLOR_RESET " [text1] [text2]\n"
     "  replaces first occurrence of text1 with text2 in previous command.",
     ""
-  },
+  },*/
   {
     ">",
     "syntax: '> [filename]' - saves stdin in filename",
@@ -573,7 +573,7 @@ int builtin_add_history_entry(int argc, char **argv)
 }
 
 void wait_for_child();
-
+/* 
 int builtin_replace_part_of_command(int argc, char **argv)
 {
   StringView sv;
@@ -594,7 +594,7 @@ int builtin_replace_part_of_command(int argc, char **argv)
     return EXIT_FAILURE;
   }
 
-  sv = (vector(HistoryEntry, &history, history.size - 1)).command;
+  sv = (vector(ptrdiff_t, &history, history.size - 1));
   str = strview_to_cstr(sv);
   
   if ((match = strstr(str, argv[1])) == NULL) {
@@ -622,7 +622,7 @@ int builtin_replace_part_of_command(int argc, char **argv)
 
   atexit(wait_for_child);
   return run_command(sv);
-}
+} */
 
 int literal_or_env(char const *str)
 {

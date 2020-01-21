@@ -1,0 +1,76 @@
+# Zaprezentowanie ekranu pomocy
+help
+help ps1
+help var
+help cd
+
+# PS1 obsługujące escape cody
+ps1 "\u[\W]\P "
+ps1 "\e[35;1m\u\e[0m[\e[34;1m\W\e[0m]\P "
+
+## Opcja \P pokazuje czy ostatnia komenda wykonała się poprawnie
+false
+true
+
+# Kompozycja poleceń
+echo 1; echo 2
+false && echo "never executed"
+true && echo "always executed"
+
+false || echo "always executed"
+true || echo "never executed"
+
+# CD
+cd src
+cd przenosi do domu
+cd - przyjmuje ścieżkę z stdin
+
+cd ..
+du | cut -f2- | grep microshell | sort | cd -
+
+# History
+history
+history | head -n 3
+history-save history.dump
+cat history.dump
+defer history.dump
+
+: 1000
+var set counter 10; goto 2000
+: 2000
+var get counter; goto 3000
+: 3000
+var - counter 1 | var set counter; goto 4000
+: 4000
+var >= counter 0 && goto 2000
+
+goto 1000
+
+history-save count_down
+exit
+history-load count_down
+goto 1000
+
+# Saving files
+date |> current.date
+cat current.date
+
+date |>> current.date
+cat current.date
+
+# var
+var set a 10
+var set b 20
+var * a b zmienne
+var % a 3 literał
+var and a 1
+
+var != a b && echo "Not equal!"
+
+# CTRL-C showcase
+: 1 "echo hello; goto 2"
+: 2 "sleep 1; goto 1"
+goto 1
+
+# Exit with custom exit code
+exit 42
