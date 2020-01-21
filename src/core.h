@@ -17,4 +17,6 @@
 /* Incomplete: portability */
 #define MAYBE_UNUSED __attribute__((unused))
 
+#define IGNORE(stmt) if ((stmt)) {}
+
 #endif

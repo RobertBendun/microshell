@@ -10,7 +10,7 @@ ptrdiff_t* map_insert(Vector *dict, ptrdiff_t key, ptrdiff_t value)
   if (vec_size == 0) {
     vector(ptrdiff_t, dict, 1) = value;
     vector(ptrdiff_t, dict, 0) = key;
-    return dict->data;
+    return (ptrdiff_t*)dict->data;
   }
 
   for (i = 0; i < vec_size; i += 2)

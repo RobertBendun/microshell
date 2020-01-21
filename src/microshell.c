@@ -422,7 +422,6 @@ int builtin_history()
 
 int builtin_goto(int argc, char **argv)
 {
-  size_t i;
   int n;
   ptrdiff_t *kv;
   StringView sv;
@@ -436,7 +435,7 @@ int builtin_goto(int argc, char **argv)
 
   kv = map_search(&history, n);
   if (kv != NULL) {
-    sv.begin = snd(kv);
+    sv.begin = (char*)snd(kv);
     sv.end = sv.begin + strlen(sv.begin);
     return run_command(sv);
   }
@@ -561,7 +560,7 @@ int builtin_add_history_entry(int argc, char **argv)
   }
 
   if (argc == 2) {
-    fgets(buffer, 1024, stdin);
+    IGNORE(fgets(buffer, 1024, stdin));
     *strchr(buffer, '\n') = '\0';
     input = buffer;
   }
@@ -635,8 +634,6 @@ int literal_or_env(char const *str)
 int builtin_var(int argc, char **argv)
 {
   StringView sv;
-  size_t i;
-  int r = 0;
   char const *command, *s;
 
   if (argc < 3) {
@@ -1149,7 +1146,7 @@ void clear_history()
 {
   size_t i;
   for (i = 1; i < history.size; i += 2)
-    free(vector(ptrdiff_t, &history, i));
+    free((void*)vector(ptrdiff_t, &history, i));
   
   vector_destroy(&history);
   fill(history, 0);
@@ -1160,7 +1157,7 @@ void clear_history()
 
 int load_history(char const *filename) 
 {
-  size_t i, n, r;
+  size_t i, n;
   FILE *f;
   ptrdiff_t v, *kv;
   StringView sv, cpy;
@@ -1170,7 +1167,7 @@ int load_history(char const *filename)
     return EXIT_FAILURE;
   }
 
-  fscanf(f, "%zu\n", &n);
+  IGNORE(fscanf(f, "%lu\n", &n));
   vector_reserve(ptrdiff_t, &history, MAX(history.capacity, n));
 
   for (i = 0; i < n; ++i) {
@@ -1178,8 +1175,8 @@ int load_history(char const *filename)
     cpy.begin = 1 + strchr(sv.begin, ' ');
     sscanf(sv.begin, "%ld ", &v);
     if ((kv = map_search(&history, v)) != NULL)
-      free(kv[1]);
-    map_insert(&history, v, strview_to_cstr(cpy));
+      free((void*)kv[1]);
+    map_insert(&history, v, (ptrdiff_t)strview_to_cstr(cpy));
     free(sv.begin);
   }
 
@@ -1280,9 +1277,9 @@ int main(int argc, char const* *argv)
       sv.begin = globals->text;
       sv.end = sv.begin + strlen(sv.begin);
       if ((kv = map_search(&history, globals->new_history_index)) != NULL) {
-        free(kv[1]);
+        free((void*)kv[1]);
       }
-      map_insert(&history, globals->new_history_index, strview_to_cstr(sv));
+      map_insert(&history, globals->new_history_index, (ptrdiff_t)strview_to_cstr(sv));
       globals->new_history_index = 0;
       --history_index;
     } else {
@@ -1304,7 +1301,7 @@ int main(int argc, char const* *argv)
 
     globals->exit_code = run_command(input);
     input.begin[input.end - input.begin] = '\0';
-    map_insert(&history, ++history_index, input.begin);
+    map_insert(&history, ++history_index, (ptrdiff_t)input.begin);
   }
 
   return EXIT_SUCCESS;
